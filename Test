@@ -3681,6 +3681,20 @@ local function fireTabButton(button)
 	if not button then
 		return false
 	end
+	-- On touch, a synthetic tap can land on a dialog overlay and abort its
+	-- typewriter. Fire the real Click connections first instead.
+	if IS_MOBILE then
+		local fired = false
+		pcall(function()
+			for _, connection in pairs(TMS.getConnections(button.MouseButton1Click)) do
+				connection:Fire()
+				fired = true
+			end
+		end)
+		if fired then
+			return true
+		end
+	end
 	if state.tapGui(button) then
 		return true
 	end
@@ -4079,6 +4093,13 @@ local function runSellOnce()
 		local sellFrame = main:FindFirstChild("SellSelections")
 		if not (buttons and sellFrame) then
 			error("the shop is missing its sell tab")
+		end
+		if IS_MOBILE then
+			-- The seller types its greeting when the shop opens. Any synthetic
+			-- tap before it finishes aborts the typewriter at the first letter,
+			-- so wait before firing Button2.
+			waitForSellDialog(main)
+			task.wait(0.3)
 		end
 		fireTabButton(buttons:FindFirstChild("Button2"))
 		task.wait(0.8)
