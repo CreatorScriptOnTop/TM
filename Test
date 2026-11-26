@@ -3800,16 +3800,14 @@ function closeShop(main)
 		if typeof(gui) == "Instance" and gui.Parent then
 			roots[#roots + 1] = gui
 		end
+		-- Do not name-filter: the exit buttons can live in a dialog ScreenGui
+		-- with any name. Only skip ScreenGuis we created ourselves.
 		pcall(function()
 			for _, child in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
 				if typeof(child) == "Instance" and child:IsA("LayerCollector")
 					and child ~= gui then
 					local name = string.upper(tostring(child.Name))
-					if string.find(name, "SHOP", 1, true)
-						or string.find(name, "DIALOG", 1, true)
-						or string.find(name, "TALK", 1, true)
-						or string.find(name, "NPC", 1, true)
-						or string.find(name, "INTERACT", 1, true) then
+					if not string.find(name, "TMS", 1, true) then
 						roots[#roots + 1] = child
 					end
 				end
@@ -3875,11 +3873,25 @@ function closeShop(main)
 	local function walkExitButtons()
 		local fired = {}
 		local trace = {}
+		local scan = {}
 		for _ = 1, 12 do
 			if shopClosed() then
 				break
 			end
 			local entries = findShopButtons()
+			if #scan == 0 then
+				for _, entry in ipairs(entries) do
+					local clicks, downs = 0, 0
+					pcall(function()
+						clicks = #TMS.getConnections(entry.button.MouseButton1Click)
+					end)
+					pcall(function()
+						downs = #TMS.getConnections(entry.button.MouseButton1Down)
+					end)
+					scan[#scan + 1] = entry.label .. " [click=" .. clicks
+						.. ",down=" .. downs .. "]"
+				end
+			end
 			local chosen, chosenLabel, chosenKey = nil, "", nil
 			for rank = 3, 2, -1 do
 				for _, entry in ipairs(entries) do
@@ -3901,8 +3913,12 @@ function closeShop(main)
 			fired[chosenKey] = true
 			trace[#trace + 1] = chosenLabel .. " -> " .. tostring(chosen.Name)
 			fireNav(chosen)
-			task.wait(IS_MOBILE and 0.35 or 0.2)
+			task.wait(IS_MOBILE and 0.6 or 0.2)
 		end
+		pcall(function()
+			G.__TMS_SHOP_CLOSE = G.__TMS_SHOP_CLOSE or {}
+			G.__TMS_SHOP_CLOSE.scan = scan
+		end)
 		return trace
 	end
 
@@ -3963,6 +3979,13 @@ function closeShop(main)
 		-- Button5 only if there was no real Back/Quit path at all.
 		if not shopClosed() and closeButton then
 			fireClose(closeButton)
+			task.wait(0.6)
+		end
+		-- Give the game time to run its real exit before deciding it failed.
+		for _ = 1, 10 do
+			if shopClosed() then
+				break
+			end
 			task.wait(0.3)
 		end
 	else
@@ -3998,20 +4021,15 @@ function closeShop(main)
 		}
 	end)
 
-	-- Last resort: hiding alone is what frozen cameras on touch, so also kill
-	-- the local ScreenGui and explicitly hand control back to the character.
-	if not shopClosed() then
+	-- PC last resort only. On touch, destroying/hiding the GUI pre-empts the
+	-- game's real Exit and leaves the character held at the NPC.
+	if not shopClosed() and not IS_MOBILE then
 		pcall(function()
 			gui.Enabled = false
 		end)
 		if frame then
 			pcall(function()
 				frame.Visible = false
-			end)
-		end
-		if IS_MOBILE then
-			pcall(function()
-				gui:Destroy()
 			end)
 		end
 	end
