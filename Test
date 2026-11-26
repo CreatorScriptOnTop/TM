@@ -3599,23 +3599,37 @@ local function waitForSellerDialog(root)
 	if not root then
 		return true
 	end
-	local previous = {}
+	local previous = nil
 	for _ = 1, 40 do
-		local current, changed = {}, false
+		local current = {}
 		pcall(function()
 			for _, obj in ipairs(root:GetDescendants()) do
 				if typeof(obj) == "Instance"
 					and (obj:IsA("TextLabel") or obj:IsA("TextButton")) then
-					local text = tostring(obj.Text or "")
-					current[obj] = text
-					if previous[obj] ~= nil and previous[obj] ~= text then
-						changed = true
-					end
+					current[obj] = tostring(obj.Text or "")
 				end
 			end
 		end)
+		local stable = false
+		if previous ~= nil then
+			stable = true
+			for obj, text in pairs(current) do
+				if previous[obj] ~= text then
+					stable = false
+					break
+				end
+			end
+			if stable then
+				for obj in pairs(previous) do
+					if current[obj] == nil then
+						stable = false
+						break
+					end
+				end
+			end
+		end
 		previous = current
-		if not changed then
+		if stable then
 			return true
 		end
 		task.wait(0.2)
@@ -3689,22 +3703,28 @@ local function openShop(timeoutSeconds)
 		end
 		task.wait(0.4)
 	end
-	pcall(FIRE_PROMPT, prompt)
-	markSell("open-prompt")
-	local deadline = os.clock() + (timeoutSeconds or 6)
+	-- One prompt fire right after teleport is sometimes ignored by the game
+	-- (the character is still settling). Retry until the GUI actually appears.
+	local deadline = os.clock() + (timeoutSeconds or 8)
+	local attempt = 0
 	while os.clock() < deadline do
-		local gui = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
-		local frame = gui and gui:FindFirstChild("MainsFrame")
-		if frame then
-			local ok, enabled = pcall(function()
-				return gui.Enabled
-			end)
-			if ok and enabled and frame.Visible then
-				markSell("open-got")
-				return frame
+		attempt = attempt + 1
+		markSell("open-prompt", attempt)
+		pcall(FIRE_PROMPT, prompt)
+		for _ = 1, 6 do
+			local gui = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
+			local frame = gui and gui:FindFirstChild("MainsFrame")
+			if frame then
+				local ok, enabled = pcall(function()
+					return gui.Enabled
+				end)
+				if ok and enabled and frame.Visible then
+					markSell("open-got")
+					return frame
+				end
 			end
+			task.wait(0.2)
 		end
-		task.wait(0.2)
 	end
 	return nil, "the shop did not open"
 end
@@ -3712,33 +3732,16 @@ local function fireTabButton(button)
 	if not button then
 		return false
 	end
-	-- Delta ignores VirtualInputManager touch events on shop buttons. Native
-	-- SelectedObject + Enter is the same path that successfully selects items.
-	if IS_MOBILE then
-		pcall(function()
-			GuiService.SelectedObject = button
-		end)
-		task.wait(0.12)
-		pressEnter()
-		task.wait(0.15)
-		return true
-	end
-	if state.tapGui(button) then
-		return true
-	end
-	local fired = false
+	-- Synthetic touch is ignored on Delta and raw :Fire() runs the game's
+	-- handler on our thread (it hangs in the typewriter). Native
+	-- SelectedObject + Enter is the path that reliably activates shop buttons.
 	pcall(function()
-		for _, connection in pairs(TMS.getConnections(button.MouseButton1Click)) do
-			connection:Fire()
-			fired = true
-		end
+		GuiService.SelectedObject = button
 	end)
-	if not fired then
-		pcall(function()
-			button:Activate()
-		end)
-	end
-	return fired
+	task.wait(0.12)
+	pressEnter()
+	task.wait(0.15)
+	return true
 end
 function closeShop(main)
 	markSell("close-enter")
@@ -4028,67 +4031,36 @@ function closeShop(main)
 	end
 
 	local navTrace = {}
-	if IS_MOBILE then
-		-- Wait for the typed dialog to actually finish. Flipping SkipDialogs
-		-- freezes the typewriter at one character, so do not skip it on touch.
-		waitForSellerDialog(gui)
-		markSell("close-wait-done")
-		task.wait(0.3)
-		navTrace = walkExitButtons()
-		markSell("close-nav-done")
-		-- Button5 IS the shop's real exit. Press it the way a player does:
-		-- synthetic touch first, then the Lua signal, then once more if the
-		-- frame is still up - that second press is the "another exit".
-		if closeButton then
-			for attempt = 1, 4 do
-				if shopClosed() then
-					break
-				end
-				-- Delta ignores VirtualInputManager touch on shop buttons, and
-				-- :Fire() runs the game's handler synchronously and hangs.
-				-- Native SelectedObject + Enter is the path that works.
-				markSell("close-select", attempt)
-				navTrace[#navTrace + 1] = "Button5 select+enter"
-				pcall(function()
-					GuiService.SelectedObject = closeButton
-				end)
-				task.wait(0.12)
-				pressEnter()
-				task.wait(0.4)
-			end
-		end
-		markSell("close-taps-done")
-		-- Let the game finish closing before deciding it failed.
-		for _ = 1, 8 do
+	-- Same path on PC and touch: wait out the typewriter, then activate the
+	-- real close button through Roblox's native selection. Flipping
+	-- SkipDialogs or calling :Fire() on the handler both abort the typewriter.
+	waitForSellerDialog(gui)
+	markSell("close-wait-done")
+	task.wait(0.3)
+	navTrace = walkExitButtons()
+	markSell("close-nav-done")
+	if closeButton then
+		for attempt = 1, 4 do
 			if shopClosed() then
 				break
 			end
-			task.wait(0.3)
-		end
-	else
-		skipDialogs()
-		fireClose(closeButton)
-		task.wait(0.2)
-		if not shopClosed() then
-			for _, btn in ipairs(closeCandidates()) do
-				if btn ~= closeButton then
-					fireClose(btn)
-					task.wait(0.1)
-					break
-				end
-			end
-		end
-		if not shopClosed() and closeButton then
+			markSell("close-select", attempt)
+			navTrace[#navTrace + 1] = "Button5 select+enter"
 			pcall(function()
 				GuiService.SelectedObject = closeButton
 			end)
+			task.wait(0.12)
 			pressEnter()
-			task.wait(0.2)
+			task.wait(0.4)
 		end
-		-- Same sweep on PC, but only if the normal close did not release us.
-		if not shopClosed() then
-			navTrace = walkExitButtons()
+	end
+	markSell("close-taps-done")
+	-- Give the game time to finish its own exit before deciding it failed.
+	for _ = 1, 8 do
+		if shopClosed() then
+			break
 		end
+		task.wait(0.3)
 	end
 	notifyServer()
 	markSell("close-diag")
@@ -4113,18 +4085,8 @@ function closeShop(main)
 		}
 	end)
 
-	-- PC last resort only. On touch, destroying/hiding the GUI pre-empts the
-	-- game's real Exit and leaves the character held at the NPC.
-	if not shopClosed() and not IS_MOBILE then
-		pcall(function()
-			gui.Enabled = false
-		end)
-		if frame then
-			pcall(function()
-				frame.Visible = false
-			end)
-		end
-	end
+	-- Never hide or destroy the shop ourselves: pre-empting the game's own
+	-- Exit leaves the character held at the NPC.
 	restoreControls()
 	return shopClosed()
 end
@@ -4147,13 +4109,10 @@ local function runSellOnce()
 		if not (buttons and sellFrame) then
 			error("the shop is missing its sell tab")
 		end
-		if IS_MOBILE then
-			-- The seller types its greeting when the shop opens. Any synthetic
-			-- tap before it finishes aborts the typewriter at the first letter,
-			-- so wait before firing Button2.
-			waitForSellerDialog(main)
-			task.wait(0.3)
-		end
+		-- The seller types its greeting when the shop opens. Any input before
+		-- it finishes aborts the typewriter at the first letter.
+		waitForSellerDialog(main)
+		task.wait(0.3)
 		markSell("sell-tab-firing")
 		fireTabButton(buttons:FindFirstChild("Button2"))
 		markSell("sell-tab-fired")
@@ -4185,13 +4144,9 @@ local function runSellOnce()
 			end
 			return text
 		end
-		if IS_MOBILE then
-			-- Let the seller finish typing before selecting anything.
-			waitForSellerDialog(main)
-			task.wait(0.3)
-		else
-			task.wait(2)
-		end
+		-- Let the seller finish typing before selecting anything.
+		waitForSellerDialog(main)
+		task.wait(0.3)
 		markSell("sell-items-loop")
 		for _, name in ipairs(SELL_ITEMS) do
 			if not ownedOne(name) then
