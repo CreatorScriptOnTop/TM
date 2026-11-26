@@ -3678,6 +3678,31 @@ function closeShop(main)
 	local buttons = frame and frame:FindFirstChild("ButtonSelections")
 	local closeButton = buttons and buttons:FindFirstChild("Button5")
 
+	-- Walk ancestors so a button inside a hidden dialog is not mistaken for a
+	-- live close target. ScreenGui uses Enabled, GuiObject uses Visible.
+	local function shopWidgetVisible(obj)
+		local node = obj
+		while typeof(node) == "Instance" and node ~= LocalPlayer.PlayerGui do
+			if node:IsA("LayerCollector") then
+				local ok, enabled = pcall(function()
+					return node.Enabled
+				end)
+				if ok and enabled == false then
+					return false
+				end
+			elseif node:IsA("GuiObject") then
+				local ok, visible = pcall(function()
+					return node.Visible
+				end)
+				if ok and visible == false then
+					return false
+				end
+			end
+			node = node.Parent
+		end
+		return true
+	end
+
 	-- On touch devices the shop swaps frames for dialogs when closing. A hidden
 	-- MainsFrame is NOT proof the shop let go of input, so only a disabled or
 	-- destroyed ScreenGui counts as really closed there.
@@ -3693,7 +3718,19 @@ function closeShop(main)
 			return true
 		end
 		if IS_MOBILE then
-			return false
+			-- Hidden MainsFrame is not enough: the shop can still hold the
+			-- player at the NPC through a Back/Back/Quit dialog stack.
+			local hasVisibleButton = false
+			pcall(function()
+				for _, obj in ipairs(currentGui:GetDescendants()) do
+					if typeof(obj) == "Instance" and obj:IsA("GuiButton")
+						and shopWidgetVisible(obj) then
+						hasVisibleButton = true
+						break
+					end
+				end
+			end)
+			return not hasVisibleButton
 		end
 		local currentFrame = currentGui:FindFirstChild("MainsFrame")
 		if not currentFrame then
@@ -3755,6 +3792,84 @@ function closeShop(main)
 		return out
 	end
 
+	-- Find the buttons that are actually on screen right now. After a sale the
+	-- shop swaps dialogs, so the live Quit button is often NOT under MainsFrame.
+	local function findShopButtons()
+		local found = {}
+		local roots = {}
+		if typeof(gui) == "Instance" and gui.Parent then
+			roots[#roots + 1] = gui
+		end
+		pcall(function()
+			for _, child in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
+				if typeof(child) == "Instance" and child:IsA("LayerCollector")
+					and child ~= gui then
+					local name = string.upper(tostring(child.Name))
+					if string.find(name, "SHOP", 1, true)
+						or string.find(name, "DIALOG", 1, true)
+						or string.find(name, "TALK", 1, true)
+						or string.find(name, "NPC", 1, true)
+						or string.find(name, "INTERACT", 1, true) then
+						roots[#roots + 1] = child
+					end
+				end
+			end
+		end)
+		for _, root in ipairs(roots) do
+			pcall(function()
+				for _, obj in ipairs(root:GetDescendants()) do
+					if typeof(obj) == "Instance" and obj:IsA("GuiButton")
+						and shopWidgetVisible(obj) then
+						local text = ""
+						if obj:IsA("TextButton") then
+							pcall(function()
+								text = tostring(obj.Text or "")
+							end)
+						end
+						found[#found + 1] = {
+							button = obj,
+							label = string.upper(tostring(obj.Name) .. " " .. text),
+						}
+					end
+				end
+			end)
+		end
+		return found
+	end
+
+	local function exitRank(label)
+		if string.find(label, "QUIT", 1, true)
+			or string.find(label, "EXIT", 1, true)
+			or string.find(label, "CLOSE", 1, true) then
+			return 3
+		end
+		if string.find(label, "BACK", 1, true)
+			or string.find(label, "CANCEL", 1, true) then
+			return 2
+		end
+		return 0
+	end
+
+	-- One press only. Firing both Down and Click on a dialog button can run its
+	-- handler twice and bounce us back into the shop.
+	local function fireNav(btn)
+		if not btn then
+			return 0
+		end
+		local fired = pressButton(btn, "MouseButton1Click")
+		if fired == 0 then
+			fired = pressButton(btn, "MouseButton1Down")
+		end
+		if fired == 0 then
+			pcall(function()
+				btn:Activate()
+			end)
+			TMS.fireSignal(btn.MouseButton1Click)
+			fired = 1
+		end
+		return fired
+	end
+
 	local function skipDialogs()
 		for _, name in ipairs({ "SkipDialogs", "Skiptext", "SkipText", "DialogFrame" }) do
 			local obj = gui:FindFirstChild(name, true)
@@ -3803,29 +3918,81 @@ function closeShop(main)
 		end)
 	end
 
-	-- Fire the real close ONCE. Re-firing Button5 or CloseShopEvent toggles the
-	-- shop back open, and the game then keeps dragging the character to the NPC.
-	fireClose(closeButton)
-	task.wait(IS_MOBILE and 0.5 or 0.2)
 	skipDialogs()
-	notifyServer()
-	if not shopClosed() then
-		for _, btn in ipairs(closeCandidates()) do
-			if btn ~= closeButton then
-				fireClose(btn)
-				task.wait(0.1)
+	if IS_MOBILE then
+		-- Touch shop is a dialog stack. After selling you press Back, then
+		-- another Back, then Quit. Button5 only hides the frame and leaves the
+		-- server-side shop session holding the character at the NPC.
+		local fired = {}
+		local navTrace = {}
+		local lastButton = nil
+		for _ = 1, 8 do
+			if shopClosed() then
 				break
 			end
+			local entries = findShopButtons()
+			local chosen = nil
+			local chosenLabel = ""
+			for rank = 3, 2, -1 do
+				for _, entry in ipairs(entries) do
+					if exitRank(entry.label) == rank then
+						chosen = entry.button
+						chosenLabel = entry.label
+						break
+					end
+				end
+				if chosen then
+					break
+				end
+			end
+			if not chosen then
+				break
+			end
+			local key = chosen:GetFullName()
+			-- The same Back button can be reused per dialog, but never spin
+			-- forever on a press that is not doing anything.
+			if chosen == lastButton and (fired[key] or 0) >= 2 then
+				break
+			end
+			fired[key] = (fired[key] or 0) + 1
+			lastButton = chosen
+			navTrace[#navTrace + 1] = chosenLabel .. " -> " .. tostring(chosen.Name)
+			fireNav(chosen)
+			task.wait(0.35)
 		end
-		task.wait(IS_MOBILE and 0.4 or 0.15)
-	end
-	if not shopClosed() and closeButton then
+		-- Button5 only if there was no real Back/Quit path at all.
+		if not shopClosed() and closeButton then
+			fireClose(closeButton)
+			task.wait(0.3)
+		end
 		pcall(function()
-			GuiService.SelectedObject = closeButton
+			G.__TMS_SHOP_CLOSE = G.__TMS_SHOP_CLOSE or {}
+			G.__TMS_SHOP_CLOSE.last = {
+				fired = navTrace,
+				closed = shopClosed(),
+			}
 		end)
-		pressEnter()
+	else
+		fireClose(closeButton)
 		task.wait(0.2)
+		if not shopClosed() then
+			for _, btn in ipairs(closeCandidates()) do
+				if btn ~= closeButton then
+					fireClose(btn)
+					task.wait(0.1)
+					break
+				end
+			end
+		end
+		if not shopClosed() and closeButton then
+			pcall(function()
+				GuiService.SelectedObject = closeButton
+			end)
+			pressEnter()
+			task.wait(0.2)
+		end
 	end
+	notifyServer()
 
 	-- Last resort: hiding alone is what frozen cameras on touch, so also kill
 	-- the local ScreenGui and explicitly hand control back to the character.
