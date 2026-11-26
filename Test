@@ -3568,19 +3568,20 @@ local function ownedSellItems()
 	return found
 end
 
--- The seller types every line one character at a time (different lines after
--- selling), and any synthetic input freezes it mid-word. Wait until the text
--- stops growing instead of looking for one fixed phrase.
-local function waitForDialogIdle(root)
+-- The seller types every line one character at a time ("Want to sell
+-- something?", then a different line after the sale). Any synthetic touch
+-- while a line is typing aborts the typewriter and leaves it stuck at the
+-- first letter ("W" / "H"). Keep hands off for a full 5 seconds first - an
+-- idle detector alone returns before typing has even started - then only
+-- proceed once the text has actually stopped changing.
+local function waitForSellerDialog(root)
+	task.wait(5)
 	if not root then
-		return false
+		return true
 	end
 	local previous = {}
-	local sawTyping = false
-	local stable = 0
-	for _ = 1, 80 do
-		local current = {}
-		local changed = false
+	for _ = 1, 40 do
+		local current, changed = {}, false
 		pcall(function()
 			for _, obj in ipairs(root:GetDescendants()) do
 				if typeof(obj) == "Instance"
@@ -3593,24 +3594,13 @@ local function waitForDialogIdle(root)
 				end
 			end
 		end)
-		if changed then
-			sawTyping = true
-		end
-		if sawTyping then
-			stable = changed and 0 or (stable + 1)
-			if stable >= 5 then
-				return true
-			end
-		else
-			stable = stable + 1
-			if stable >= 3 then
-				return true
-			end
-		end
 		previous = current
+		if not changed then
+			return true
+		end
 		task.wait(0.2)
 	end
-	return false
+	return true
 end
 
 local function backpackCount()
@@ -4004,7 +3994,7 @@ function closeShop(main)
 	if IS_MOBILE then
 		-- Wait for the typed dialog to actually finish. Flipping SkipDialogs
 		-- freezes the typewriter at one character, so do not skip it on touch.
-		waitForDialogIdle(gui)
+		waitForSellerDialog(gui)
 		task.wait(0.3)
 		navTrace = walkExitButtons()
 		-- Button5 IS the shop's real exit. Press it the way a player does:
@@ -4015,12 +4005,19 @@ function closeShop(main)
 				if shopClosed() then
 					break
 				end
+				-- Signal first: a synthetic touch is what aborts the typewriter.
+				navTrace[#navTrace + 1] = "Button5 signal"
+				fireClose(closeButton)
+				task.wait(0.4)
+				if shopClosed() then
+					break
+				end
+				navTrace[#navTrace + 1] = "Button5 tap+signal"
 				state.tapGui(closeButton)
 				task.wait(0.3)
 				if shopClosed() then
 					break
 				end
-				navTrace[#navTrace + 1] = "Button5 tap+signal"
 				fireClose(closeButton)
 				task.wait(0.5)
 			end
@@ -4060,9 +4057,22 @@ function closeShop(main)
 	notifyServer()
 	pcall(function()
 		G.__TMS_SHOP_CLOSE = G.__TMS_SHOP_CLOSE or {}
+		local texts = {}
+		pcall(function()
+			for _, obj in ipairs(gui:GetDescendants()) do
+				if typeof(obj) == "Instance"
+					and (obj:IsA("TextLabel") or obj:IsA("TextButton")) then
+					local text = tostring(obj.Text or "")
+					if text ~= "" then
+						texts[#texts + 1] = tostring(obj.Name) .. "=" .. text
+					end
+				end
+			end
+		end)
 		G.__TMS_SHOP_CLOSE.last = {
 			fired = navTrace,
 			closed = shopClosed(),
+			texts = texts,
 		}
 	end)
 
@@ -4101,7 +4111,7 @@ local function runSellOnce()
 			-- The seller types its greeting when the shop opens. Any synthetic
 			-- tap before it finishes aborts the typewriter at the first letter,
 			-- so wait before firing Button2.
-			waitForDialogIdle(main)
+			waitForSellerDialog(main)
 			task.wait(0.3)
 		end
 		fireTabButton(buttons:FindFirstChild("Button2"))
@@ -4133,7 +4143,7 @@ local function runSellOnce()
 		end
 		if IS_MOBILE then
 			-- Let the seller finish typing before selecting anything.
-			waitForDialogIdle(main)
+			waitForSellerDialog(main)
 			task.wait(0.3)
 		else
 			task.wait(2)
