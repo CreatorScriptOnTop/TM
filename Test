@@ -1000,6 +1000,8 @@ local OK_EXEC_NAME, DETECTED_EXEC = pcall(TMS.executorName)
 if OK_EXEC_NAME and type(DETECTED_EXEC) == "string" and DETECTED_EXEC ~= "" then
 	EXECUTOR_NAME = DETECTED_EXEC
 end
+-- Mobile executors report wildly different names, so use a name table plus
+-- substring matching. Add names here whenever a new mobile executor appears.
 local MOBILE_EXECUTORS = {
 	delta = true,
 	fluxus = true,
@@ -1007,12 +1009,33 @@ local MOBILE_EXECUTORS = {
 	velocity = true,
 	aura = true,
 	codex = true,
+	arceus = true,
 	quantum = true,
 	solara = true,
 	xeno = true,
+	hydrogen = true,
+	trigon = true,
+	wave = true,
+	vape = true,
+	ios = true,
+	android = true,
+	mobile = true,
 }
 if OK_EXEC_NAME and type(DETECTED_EXEC) == "string" then
-	if MOBILE_EXECUTORS[string.lower(DETECTED_EXEC)] then
+	local lowered = string.lower(DETECTED_EXEC)
+	if MOBILE_EXECUTORS[lowered] then
+		IS_MOBILE = true
+	else
+		for name in pairs(MOBILE_EXECUTORS) do
+			if string.find(lowered, name, 1, true) then
+				IS_MOBILE = true
+				break
+			end
+		end
+	end
+end
+for _, flag in ipairs({ "MOBILE", "IS_MOBILE", "MOBILE_EXECUTOR", "DELTA_LOADED", "FLUXUS_LOADED" }) do
+	if executorFlag(flag) then
 		IS_MOBILE = true
 	end
 end
@@ -1360,11 +1383,17 @@ do
 	end
 end
 Loading.setStage("Building menu", "Creating " .. HUB_NAME .. " window", 0.88)
+-- WindUI clamps Size.Offset but NOT Size.Scale. A scaled size therefore grows
+-- with the viewport, which makes the menu enormous on MuMu / tablet viewports.
+-- Use fixed offsets so the panel stays phone-sized on every device.
+local mobileWidth = math.clamp(math.floor(Camera.ViewportSize.X * 0.92), 560, 600)
+local mobileHeight = math.clamp(math.floor(Camera.ViewportSize.Y * 0.62), 350, 460)
+local TROLL_ASSET = trollfaceAsset()
 local Window = WindUI:CreateWindow({
 	Title = DISPLAY_NAME,
-	Icon = "venetian-mask",
+	Icon = TROLL_ASSET,
 	Folder = "TMS_Chests",
-	Size = IS_MOBILE and UDim2.new(0.92, 0, 0.62, 0) or UDim2.fromOffset(600, 460),
+	Size = IS_MOBILE and UDim2.fromOffset(mobileWidth, mobileHeight) or UDim2.fromOffset(600, 460),
 	Theme = state.look.theme,
 	Acrylic = not IS_MOBILE,
 	Topbar = {
@@ -1378,7 +1407,7 @@ local Window = WindUI:CreateWindow({
 	},
 	OpenButton = {
 		Title = DISPLAY_NAME,
-		Icon = "venetian-mask",
+		Icon = TROLL_ASSET,
 		CornerRadius = UDim.new(1, 0),
 		StrokeThickness = 2,
 		Color = ColorSequence.new(Color3.fromRGB(120, 80, 255), Color3.fromRGB(255, 90, 140)),
@@ -1400,7 +1429,11 @@ do
 			return
 		end
 		local troll = drag:FindFirstChildOfClass("ImageLabel")
-		if not troll or not tostring(troll.Image):find("tms_trollface", 1, true) then
+		local trollOk = troll ~= nil and (
+			tostring(troll.Image):find("tms_trollface", 1, true)
+			or tostring(troll.Image) == tostring(TROLL_ASSET)
+		)
+		if not trollOk then
 			return
 		end
 		frame.Size = UDim2.fromOffset(48, 48)
@@ -1448,6 +1481,11 @@ do
 		end
 		drag.Size = UDim2.fromScale(1, 1)
 		drag.Position = UDim2.fromScale(0, 0)
+		troll.Image = TROLL_ASSET
+		troll.ImageRectSize = Vector2.new(0, 0)
+		troll.ImageRectOffset = Vector2.new(0, 0)
+		troll.ImageTransparency = 0
+		troll.ScaleType = Enum.ScaleType.Fit
 		troll.Size = UDim2.fromScale(0.8, 0.8)
 		troll.Position = UDim2.fromScale(0.5, 0.5)
 		troll.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -1615,10 +1653,11 @@ do
 		local left = topbar and topbar:FindFirstChild("Left")
 		local mark = left and firstImage(left)
 		if mark and trollImage then
-			if mark.Image ~= trollImage then
-				mark.Image = trollImage
-				mark.ScaleType = Enum.ScaleType.Fit
-			end
+			mark.Image = trollImage
+			mark.ImageRectSize = Vector2.new(0, 0)
+			mark.ImageRectOffset = Vector2.new(0, 0)
+			mark.ImageTransparency = 0
+			mark.ScaleType = Enum.ScaleType.Fit
 			list[#list + 1] = mark
 			seen[mark] = true
 		end
@@ -1645,10 +1684,11 @@ do
 			end
 		end
 		if openMark and trollImage then
-			if openMark.Image ~= trollImage then
-				openMark.Image = trollImage
-				openMark.ScaleType = Enum.ScaleType.Fit
-			end
+			openMark.Image = trollImage
+			openMark.ImageRectSize = Vector2.new(0, 0)
+			openMark.ImageRectOffset = Vector2.new(0, 0)
+			openMark.ImageTransparency = 0
+			openMark.ScaleType = Enum.ScaleType.Fit
 			if not seen[openMark] then
 				list[#list + 1] = openMark
 				seen[openMark] = true
@@ -1656,7 +1696,8 @@ do
 		end
 		if trollImage then
 			for _, d in ipairs(gui:GetDescendants()) do
-				if d:IsA("ImageLabel") and not seen[d] and type(d.Image) == "string" and string.find(d.Image, "tms_trollface", 1, true) then
+				if d:IsA("ImageLabel") and not seen[d] and type(d.Image) == "string"
+					and (string.find(d.Image, "tms_trollface", 1, true) or d.Image == trollImage) then
 					list[#list + 1] = d
 					seen[d] = true
 				end
