@@ -4021,27 +4021,21 @@ function closeShop(main)
 		-- synthetic touch first, then the Lua signal, then once more if the
 		-- frame is still up - that second press is the "another exit".
 		if closeButton then
-			for _ = 1, 3 do
+			for attempt = 1, 4 do
 				if shopClosed() then
 					break
 				end
-				-- Signal first: a synthetic touch is what aborts the typewriter.
-				navTrace[#navTrace + 1] = "Button5 signal"
-				fireClose(closeButton)
-				task.wait(0.4)
-				if shopClosed() then
-					break
-				end
-				navTrace[#navTrace + 1] = "Button5 tap+signal"
+				-- Never :Fire() the shop's handlers on touch. A signal fire
+				-- runs its click handler synchronously and that handler hangs
+				-- in the dialog loop (the line stops at its first letter).
+				-- A real synthetic tap is what a player does and completes.
+				markSell("close-tap", attempt)
+				navTrace[#navTrace + 1] = "Button5 tap"
 				state.tapGui(closeButton)
-				task.wait(0.3)
-				if shopClosed() then
-					break
-				end
-				fireClose(closeButton)
-				task.wait(0.5)
+				task.wait(0.4)
 			end
 		end
+		markSell("close-taps-done")
 		-- Let the game finish closing before deciding it failed.
 		for _ = 1, 8 do
 			if shopClosed() then
