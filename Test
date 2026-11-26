@@ -3954,10 +3954,29 @@ function closeShop(main)
 		end)
 	end
 
-	skipDialogs()
 	local navTrace = {}
 	if IS_MOBILE then
-		-- Keep the scan trace for diagnostics, but there is no Back/Quit dialog.
+		-- The shop types its dialog ("Want to sell something?") one character at
+		-- a time. Back does not exist until the full line is shown, so wait for
+		-- a real Back/Quit button before trying to close.
+		for _ = 1, 40 do
+			if shopClosed() then
+				break
+			end
+			local entries = findShopButtons()
+			local ready = false
+			for _, entry in ipairs(entries) do
+				if exitRank(entry.label) > 0 then
+					ready = true
+					break
+				end
+			end
+			if ready then
+				break
+			end
+			task.wait(0.25)
+		end
+		skipDialogs()
 		navTrace = walkExitButtons()
 		-- Button5 IS the shop's real exit. Press it the way a player does:
 		-- synthetic touch first, then the Lua signal, then once more if the
@@ -3985,6 +4004,7 @@ function closeShop(main)
 			task.wait(0.3)
 		end
 	else
+		skipDialogs()
 		fireClose(closeButton)
 		task.wait(0.2)
 		if not shopClosed() then
@@ -4075,7 +4095,34 @@ local function runSellOnce()
 			end
 			return text
 		end
-		task.wait(2)
+		if IS_MOBILE then
+			-- The shop types "Want to sell something?" one character at a time.
+			-- The Back button only exists once the line finishes, so wait for it
+			-- before touching any item or Sell button.
+			for _ = 1, 40 do
+				local ready = false
+				pcall(function()
+					for _, btn in ipairs(main:GetDescendants()) do
+						if typeof(btn) == "Instance" and btn:IsA("GuiButton") then
+							local text = btn:IsA("TextButton") and tostring(btn.Text or "") or ""
+							local label = string.upper(tostring(btn.Name) .. " " .. text)
+							if string.find(label, "BACK", 1, true)
+								or string.find(label, "QUIT", 1, true)
+								or string.find(label, "EXIT", 1, true) then
+								ready = true
+								break
+							end
+						end
+					end
+				end)
+				if ready then
+					break
+				end
+				task.wait(0.25)
+			end
+		else
+			task.wait(2)
+		end
 		for _, name in ipairs(SELL_ITEMS) do
 			if not ownedOne(name) then
 				continue
