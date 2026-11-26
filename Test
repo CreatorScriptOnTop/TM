@@ -3712,6 +3712,17 @@ local function fireTabButton(button)
 	if not button then
 		return false
 	end
+	-- Delta ignores VirtualInputManager touch events on shop buttons. Native
+	-- SelectedObject + Enter is the same path that successfully selects items.
+	if IS_MOBILE then
+		pcall(function()
+			GuiService.SelectedObject = button
+		end)
+		task.wait(0.12)
+		pressEnter()
+		task.wait(0.15)
+		return true
+	end
 	if state.tapGui(button) then
 		return true
 	end
@@ -4033,13 +4044,16 @@ function closeShop(main)
 				if shopClosed() then
 					break
 				end
-				-- Never :Fire() the shop's handlers on touch. A signal fire
-				-- runs its click handler synchronously and that handler hangs
-				-- in the dialog loop (the line stops at its first letter).
-				-- A real synthetic tap is what a player does and completes.
-				markSell("close-tap", attempt)
-				navTrace[#navTrace + 1] = "Button5 tap"
-				state.tapGui(closeButton)
+				-- Delta ignores VirtualInputManager touch on shop buttons, and
+				-- :Fire() runs the game's handler synchronously and hangs.
+				-- Native SelectedObject + Enter is the path that works.
+				markSell("close-select", attempt)
+				navTrace[#navTrace + 1] = "Button5 select+enter"
+				pcall(function()
+					GuiService.SelectedObject = closeButton
+				end)
+				task.wait(0.12)
+				pressEnter()
 				task.wait(0.4)
 			end
 		end
