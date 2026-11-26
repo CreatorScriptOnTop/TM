@@ -3568,12 +3568,20 @@ local function ownedSellItems()
 	return found
 end
 
+pcall(function()
+	G.__TMS_SELL_HISTORY = {}
+end)
 local function markSell(stage, extra)
 	pcall(function()
 		G.__TMS_SELL_STAGE = stage
 		G.__TMS_SELL_STAGE_AT = os.clock()
-		if extra ~= nil then
-			G.__TMS_SELL_STAGE_EXTRA = tostring(extra)
+		G.__TMS_SELL_STAGE_EXTRA = extra ~= nil and tostring(extra) or ""
+		G.__TMS_SELL_HISTORY = G.__TMS_SELL_HISTORY or {}
+		local history = G.__TMS_SELL_HISTORY
+		history[#history + 1] = string.format("%.1f %s%s", os.clock(), stage,
+			extra ~= nil and (" (" .. tostring(extra) .. ")") or "")
+		if #history > 40 then
+			table.remove(history, 1)
 		end
 	end)
 end
