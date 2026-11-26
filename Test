@@ -3677,6 +3677,10 @@ function closeShop(main)
 	local frame = main or gui:FindFirstChild("MainsFrame")
 	local buttons = frame and frame:FindFirstChild("ButtonSelections")
 	local closeButton = buttons and buttons:FindFirstChild("Button5")
+
+	-- On touch devices the shop swaps frames for dialogs when closing. A hidden
+	-- MainsFrame is NOT proof the shop let go of input, so only a disabled or
+	-- destroyed ScreenGui counts as really closed there.
 	local function shopClosed()
 		local currentGui = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
 		if not currentGui then
@@ -3688,6 +3692,9 @@ function closeShop(main)
 		if okEnabled and enabled == false then
 			return true
 		end
+		if IS_MOBILE then
+			return false
+		end
 		local currentFrame = currentGui:FindFirstChild("MainsFrame")
 		if not currentFrame then
 			return true
@@ -3697,6 +3704,28 @@ function closeShop(main)
 		end)
 		return okVisible and visible == false
 	end
+
+	-- Always fire the Lua connections. Synthetic taps report success without
+	-- actually activating the button on touch, which left the shop logically
+	-- open and stole the camera afterwards.
+	local function fireClose(btn)
+		if not btn then
+			return 0
+		end
+		local down = pressButton(btn, "MouseButton1Down")
+		local click = pressButton(btn, "MouseButton1Click")
+		if click == 1 then
+			click = click + pressButton(btn, "MouseButton1Click")
+		end
+		if down == 0 and click == 0 then
+			pcall(function()
+				btn:Activate()
+			end)
+			TMS.fireSignal(btn.MouseButton1Click)
+		end
+		return down + click
+	end
+
 	local function closeCandidates()
 		local out = {}
 		if closeButton then
@@ -3705,7 +3734,7 @@ function closeShop(main)
 		if frame then
 			pcall(function()
 				for _, obj in ipairs(frame:GetDescendants()) do
-					if obj:IsA("GuiButton") then
+					if typeof(obj) == "Instance" and obj:IsA("GuiButton") then
 						local text = ""
 						if obj:IsA("TextButton") then
 							pcall(function()
@@ -3725,30 +3754,84 @@ function closeShop(main)
 		end
 		return out
 	end
-	local function tryClose()
+
+	local function skipDialogs()
+		for _, name in ipairs({ "SkipDialogs", "Skiptext", "SkipText", "DialogFrame" }) do
+			local obj = gui:FindFirstChild(name, true)
+			if typeof(obj) == "Instance" then
+				if obj:IsA("GuiButton") then
+					fireClose(obj)
+				elseif obj:IsA("BoolValue") then
+					pcall(function()
+						obj.Value = true
+					end)
+				end
+			end
+		end
+	end
+
+	local function notifyServer()
+		pcall(function()
+			local rs = game:GetService("ReplicatedStorage")
+			local remote = rs and rs:FindFirstChild("CloseShopEvent")
+			if typeof(remote) == "Instance" and remote:IsA("RemoteEvent") then
+				remote:FireServer()
+			end
+		end)
+	end
+
+	local function restoreControls()
+		pcall(function()
+			GuiService.SelectedObject = nil
+		end)
+		pcall(function()
+			local cam = workspace.CurrentCamera
+			if cam then
+				cam.CameraType = Enum.CameraType.Custom
+				cam.CameraMode = Enum.CameraMode.Classic
+			end
+			LocalPlayer.CameraMode = Enum.CameraMode.Classic
+		end)
+		pcall(function()
+			local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+			if hum then
+				hum.CameraOffset = Vector3.zero
+				if hum.WalkSpeed < 1 and not state.localMods.fly then
+					hum.WalkSpeed = state.localMods.speed and state.localMods.speedValue or 16
+				end
+			end
+		end)
+	end
+
+	for _ = 1, 3 do
+		if shopClosed() then
+			break
+		end
+		fireClose(closeButton)
+		task.wait(IS_MOBILE and 0.35 or 0.15)
+		skipDialogs()
 		for _, btn in ipairs(closeCandidates()) do
-			if pressEither(btn) == 0 then
-				pcall(function()
-					btn:Activate()
-				end)
-				TMS.fireSignal(btn.MouseButton1Click)
+			if btn ~= closeButton then
+				fireClose(btn)
 			end
-			task.wait(0.1)
-			if shopClosed() then
-				return true
-			end
+		end
+		task.wait(IS_MOBILE and 0.35 or 0.1)
+		notifyServer()
+		if shopClosed() then
+			break
 		end
 		if closeButton then
 			pcall(function()
 				GuiService.SelectedObject = closeButton
 			end)
-			task.wait(0.1)
 			pressEnter()
 			task.wait(0.2)
-			if shopClosed() then
-				return true
-			end
 		end
+	end
+
+	-- Last resort: hiding alone is what frozen cameras on touch, so also kill
+	-- the local ScreenGui and explicitly hand control back to the character.
+	if not shopClosed() then
 		pcall(function()
 			gui.Enabled = false
 		end)
@@ -3757,20 +3840,14 @@ function closeShop(main)
 				frame.Visible = false
 			end)
 		end
-		return shopClosed()
-	end
-	for _ = 1, 3 do
-		if shopClosed() then
-			break
+		if IS_MOBILE then
+			pcall(function()
+				gui:Destroy()
+			end)
 		end
-		if tryClose() then
-			break
-		end
-		task.wait(0.2)
+		notifyServer()
 	end
-	pcall(function()
-		GuiService.SelectedObject = nil
-	end)
+	restoreControls()
 	return shopClosed()
 end
 local function runSellOnce()
