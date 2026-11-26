@@ -3870,6 +3870,42 @@ function closeShop(main)
 		return fired
 	end
 
+	-- Press every real exit/back button once. Stopping at the first one left a
+	-- second Exit still holding the player at the NPC with no GUI on screen.
+	local function walkExitButtons()
+		local fired = {}
+		local trace = {}
+		for _ = 1, 12 do
+			if shopClosed() then
+				break
+			end
+			local entries = findShopButtons()
+			local chosen, chosenLabel, chosenKey = nil, "", nil
+			for rank = 3, 2, -1 do
+				for _, entry in ipairs(entries) do
+					local key = entry.button:GetFullName()
+					if exitRank(entry.label) == rank and not fired[key] then
+						chosen = entry.button
+						chosenLabel = entry.label
+						chosenKey = key
+						break
+					end
+				end
+				if chosen then
+					break
+				end
+			end
+			if not chosen then
+				break
+			end
+			fired[chosenKey] = true
+			trace[#trace + 1] = chosenLabel .. " -> " .. tostring(chosen.Name)
+			fireNav(chosen)
+			task.wait(IS_MOBILE and 0.35 or 0.2)
+		end
+		return trace
+	end
+
 	local function skipDialogs()
 		for _, name in ipairs({ "SkipDialogs", "Skiptext", "SkipText", "DialogFrame" }) do
 			local obj = gui:FindFirstChild(name, true)
@@ -3919,59 +3955,16 @@ function closeShop(main)
 	end
 
 	skipDialogs()
+	local navTrace = {}
 	if IS_MOBILE then
-		-- Touch shop is a dialog stack. After selling you press Back, then
-		-- another Back, then Quit. Button5 only hides the frame and leaves the
-		-- server-side shop session holding the character at the NPC.
-		local fired = {}
-		local navTrace = {}
-		local lastButton = nil
-		for _ = 1, 8 do
-			if shopClosed() then
-				break
-			end
-			local entries = findShopButtons()
-			local chosen = nil
-			local chosenLabel = ""
-			for rank = 3, 2, -1 do
-				for _, entry in ipairs(entries) do
-					if exitRank(entry.label) == rank then
-						chosen = entry.button
-						chosenLabel = entry.label
-						break
-					end
-				end
-				if chosen then
-					break
-				end
-			end
-			if not chosen then
-				break
-			end
-			local key = chosen:GetFullName()
-			-- The same Back button can be reused per dialog, but never spin
-			-- forever on a press that is not doing anything.
-			if chosen == lastButton and (fired[key] or 0) >= 2 then
-				break
-			end
-			fired[key] = (fired[key] or 0) + 1
-			lastButton = chosen
-			navTrace[#navTrace + 1] = chosenLabel .. " -> " .. tostring(chosen.Name)
-			fireNav(chosen)
-			task.wait(0.35)
-		end
+		-- Touch shop is a dialog stack: Exit, another Exit, then Quit. Press
+		-- every visible exit/back button instead of stopping at the first one.
+		navTrace = walkExitButtons()
 		-- Button5 only if there was no real Back/Quit path at all.
 		if not shopClosed() and closeButton then
 			fireClose(closeButton)
 			task.wait(0.3)
 		end
-		pcall(function()
-			G.__TMS_SHOP_CLOSE = G.__TMS_SHOP_CLOSE or {}
-			G.__TMS_SHOP_CLOSE.last = {
-				fired = navTrace,
-				closed = shopClosed(),
-			}
-		end)
 	else
 		fireClose(closeButton)
 		task.wait(0.2)
@@ -3991,8 +3984,19 @@ function closeShop(main)
 			pressEnter()
 			task.wait(0.2)
 		end
+		-- Same sweep on PC, but only if the normal close did not release us.
+		if not shopClosed() then
+			navTrace = walkExitButtons()
+		end
 	end
 	notifyServer()
+	pcall(function()
+		G.__TMS_SHOP_CLOSE = G.__TMS_SHOP_CLOSE or {}
+		G.__TMS_SHOP_CLOSE.last = {
+			fired = navTrace,
+			closed = shopClosed(),
+		}
+	end)
 
 	-- Last resort: hiding alone is what frozen cameras on touch, so also kill
 	-- the local ScreenGui and explicitly hand control back to the character.
