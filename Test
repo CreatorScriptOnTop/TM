@@ -3803,30 +3803,28 @@ function closeShop(main)
 		end)
 	end
 
-	for _ = 1, 3 do
-		if shopClosed() then
-			break
-		end
-		fireClose(closeButton)
-		task.wait(IS_MOBILE and 0.35 or 0.15)
-		skipDialogs()
+	-- Fire the real close ONCE. Re-firing Button5 or CloseShopEvent toggles the
+	-- shop back open, and the game then keeps dragging the character to the NPC.
+	fireClose(closeButton)
+	task.wait(IS_MOBILE and 0.5 or 0.2)
+	skipDialogs()
+	notifyServer()
+	if not shopClosed() then
 		for _, btn in ipairs(closeCandidates()) do
 			if btn ~= closeButton then
 				fireClose(btn)
+				task.wait(0.1)
+				break
 			end
 		end
-		task.wait(IS_MOBILE and 0.35 or 0.1)
-		notifyServer()
-		if shopClosed() then
-			break
-		end
-		if closeButton then
-			pcall(function()
-				GuiService.SelectedObject = closeButton
-			end)
-			pressEnter()
-			task.wait(0.2)
-		end
+		task.wait(IS_MOBILE and 0.4 or 0.15)
+	end
+	if not shopClosed() and closeButton then
+		pcall(function()
+			GuiService.SelectedObject = closeButton
+		end)
+		pressEnter()
+		task.wait(0.2)
 	end
 
 	-- Last resort: hiding alone is what frozen cameras on touch, so also kill
@@ -3845,7 +3843,6 @@ function closeShop(main)
 				gui:Destroy()
 			end)
 		end
-		notifyServer()
 	end
 	restoreControls()
 	return shopClosed()
