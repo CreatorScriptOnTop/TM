@@ -404,7 +404,6 @@ local TMS = (function()
 		" if type(H) == \"table\" then\n",
 		"  pcall(H.setParry, false)\n",
 		"  pcall(H.setDodge, false)\n",
-		"  pcall(H.setM1, false)\n",
 		" end\n",
 		" local stage = readFile(\"tms_debug_stage.txt\") or g(\"__TMS_DEBUG_STAGE\")\n",
 		" if type(stage) == \"string\" then\n",
@@ -9770,7 +9769,7 @@ state.hyperWaitCutsceneEnd = function(token, maxSeconds)
 			quiet = 0
 		else
 			quiet += 0.25
-			if quiet >= 1 then
+			if quiet >= 2.5 then
 				return true
 			end
 		end
@@ -9935,46 +9934,27 @@ state.hyperSoulReady = function()
 	return state.hyperFindSoul() ~= nil
 end
 state.hyperFreshSoul = function()
-	local function usable(o)
-		if not o then
-			return false
-		end
-		if state.hyperSoulIgnore and state.hyperSoulIgnore[o] then
-			return false
-		end
-		local node = o
-		while node and node ~= workspace do
-			local n = string.lower(node.Name or "")
-			if string.find(n, "sansta", 1, true) or string.find(n, "hate", 1, true) then
-				local hum = node:FindFirstChildOfClass("Humanoid")
-				if not hum or hum.Health > 0 then
-					return false
-				end
-				break
-			end
-			node = node.Parent
-		end
-		return true
-	end
+	-- hyperFindSoul already rejects anything parented under a HyperSansta/HATE model.
+	-- Never fall back to a raw workspace scan here: a dead boss keeps "heart" parts
+	-- inside its body, and treating one as a fresh soul ends the run during a phase cutscene.
 	local soul = state.hyperFindSoul and state.hyperFindSoul()
-	if soul and usable(soul) then
-		return soul
+	if not soul then
+		return nil
 	end
-	for _, o in ipairs(workspace:GetDescendants()) do
-		if o:IsA("BasePart") or o:IsA("Model") or o:IsA("ProximityPrompt") then
-			local n = string.lower(o.Name or "")
-			if (string.find(n, "hyper", 1, true) and (string.find(n, "soul", 1, true) or string.find(n, "heart", 1, true)))
-				or n == "soul"
-				or n == "heart"
-				or string.find(n, "hypersoul", 1, true)
-				or string.find(n, "hyperheart", 1, true) then
-				if usable(o) then
-					return o
-				end
-			end
+	if state.hyperSoulIgnore and state.hyperSoulIgnore[soul] then
+		return nil
+	end
+	-- Explicit second guard: a soul must sit outside every boss body. The game
+	-- keeps "heart" meshes inside HyperSansta/HATE even after health reaches 0.
+	local node = soul
+	while node and node ~= workspace do
+		local n = string.lower(tostring(node.Name or ""))
+		if string.find(n, "sansta", 1, true) or string.find(n, "hate", 1, true) then
+			return nil
 		end
+		node = node.Parent
 	end
-	return nil
+	return soul
 end
 state.hyperDeadBoss = function()
 	for _, name in ipairs({ "HyperSanstaHATE", "HyperSansta" }) do
@@ -9985,6 +9965,19 @@ state.hyperDeadBoss = function()
 		end
 	end
 	return nil
+end
+state.hyperBossPending = function()
+	for _, name in ipairs({ "HyperSansta", "HyperSanstaHATE" }) do
+		local model = workspace:FindFirstChild(name)
+		if model then
+			local hum = model:FindFirstChildOfClass("Humanoid")
+			local root = model:FindFirstChild("HumanoidRootPart")
+			if (hum and hum.Health > 0) or root then
+				return true
+			end
+		end
+	end
+	return false
 end
 state.hyperAutoSequence = function(token)
 	if not state.hyperAutoActive(token) then
@@ -10051,7 +10044,15 @@ state.hyperAutoSequence = function(token)
 		if kills < 1 then
 			return false
 		end
-		if freshSoul() then
+		-- A phase death leaves the old boss/root alive while its cutscene plays.
+		-- Never finish during that window, even if health is already zero.
+		if state.hyperDialogueActive and state.hyperDialogueActive() then
+			return false
+		end
+		if state.hyperBossPending and state.hyperBossPending() then
+			return false
+		end
+		if kills >= 2 and freshSoul() then
 			return true
 		end
 		if state.hyperQuickKillTarget and state.hyperQuickKillTarget() then
@@ -10071,6 +10072,34 @@ state.hyperAutoSequence = function(token)
 		while state.hyperAutoActive(token) and waited < waitSeconds do
 			task.wait(0.5)
 			waited += 0.5
+		end
+		-- Extra safety: the soul wait can straddle the final phase cutscene.
+		-- Hold position until dialogue/root cleanup finishes instead of teleporting
+		-- into a boss that is about to change phase.
+		local guard = 0
+		while state.hyperAutoActive(token) and guard < 60 do
+			local dialogue = state.hyperDialogueActive and state.hyperDialogueActive() or false
+			local pending = state.hyperBossPending and state.hyperBossPending() or false
+			if not dialogue and not pending then
+				break
+			end
+			task.wait(0.5)
+			guard += 0.5
+		end
+		if state.hyperAutoActive(token)
+			and ((state.hyperDialogueActive and state.hyperDialogueActive() )
+				or (state.hyperBossPending and state.hyperBossPending())) then
+			local autoToggle = state.uiToggles and state.uiToggles.hyperAuto
+			if autoToggle then
+				pcall(function()
+					autoToggle:Set(false)
+				end)
+			end
+			state.hyperReleaseSafe(token)
+			state.hyperRemoveBaseplate()
+			state.hyperAutoRunning = false
+			notify("Hyper Sansta", "Phase transition did not finish. Stopped without teleporting.", "alert-triangle")
+			return
 		end
 		state.hyperReleaseSafe(token)
 		local target = freshSoul()
@@ -10464,6 +10493,7 @@ state.ascend = {
 	dodged = 0,
 	parries = 0,
 	m1s = 0,
+	instaKills = 0,
 	jumps = 0,
 	m1Parries = 0,
 	lastWord = "",
@@ -10480,6 +10510,49 @@ state.ascend.stop = function()
 		end)
 		state.ascend.origin = nil
 	end
+end
+-- Manual one-shot kill. The Ascend boss only accepts the kill while its
+-- stamina bar is empty, so the button checks that before writing Health = 0.
+state.ascend.instaOnce = function()
+	local b = workspace:FindFirstChild("Bosses") and workspace.Bosses:FindFirstChild("Ascend")
+	if not b then
+		notify("Insta Kill", "Ascend boss not found.", "alert-triangle")
+		return false
+	end
+	local humB = b:FindFirstChildOfClass("Humanoid")
+	if not humB or humB.Health <= 0 then
+		notify("Insta Kill", "Boss is already down.", "check")
+		return false
+	end
+	local plr = game:GetService("Players").LocalPlayer
+	local stanceZero = false
+	local ai = b:FindFirstChild("AI")
+	local misc = ai and ai:FindFirstChild("Stuff") and ai.Stuff:FindFirstChild("Misc")
+	local stamina = misc and misc:FindFirstChild("Stamina")
+	if stamina and type(stamina.Value) == "number" then
+		stanceZero = stamina.Value <= 0
+	else
+		local pg = plr:FindFirstChildOfClass("PlayerGui")
+		local bb = pg and pg:FindFirstChild("BossBar")
+		local bar = bb and bb:FindFirstChild("MainFrame") and bb.MainFrame:FindFirstChild("BossBar")
+		bar = bar and bar:FindFirstChild("StaminaBarFrame") and bar:FindFirstChild("Bar")
+		if bar then stanceZero = bar.Size.X.Scale <= 0.01 end
+	end
+	if not stanceZero then
+		notify("Insta Kill", "Wait until the stamina bar is empty.", "alert-triangle")
+		return false
+	end
+	local ok = pcall(function()
+		humB.Health = 0
+	end)
+	if ok then
+		state.ascend.m1s += 1
+		state.ascend.instaKills += 1
+		notify("Insta Kill", "Fired once.", "skull")
+		return true
+	end
+	notify("Insta Kill", "Could not damage the boss.", "alert-triangle")
+	return false
 end
 state.ascend.run = function()
 	if state.ascend.running then
@@ -10595,6 +10668,10 @@ state.ascend.run = function()
 		local ceaseNoclipUntil = 0
 		local ceaseNoclipPrev = false
 		local parryAt = 0
+		local disappearAt = 0
+		local disappearAnimTp = nil
+		local disappearParryAt = 0
+		local lastDisappearStop = 0
 		local prevInAb = false
 		local prevMelee = false
 		local m1StrikeAt = 0
@@ -10651,9 +10728,6 @@ state.ascend.run = function()
 			["Your mortality led you here."] = 1.05,
 			["I have an offer."] = 1.05,
 		}
-		local m1Origin = nil
-		local m1Cam = nil
-		local lastM1 = 0
 		while state.ascend.auto and task.wait(0.02) do
 			local now = os.clock()
 			local bossObj = workspace:FindFirstChild("Bosses") and workspace.Bosses:FindFirstChild("Ascend")
@@ -10697,33 +10771,75 @@ state.ascend.run = function()
 					if (nowEnd == "." or nowEnd == "?") and not (prevEnd == "." or prevEnd == "?")
 						and word ~= "" then
 						state.ascend.lastWord = word
-						local delay = parryWordDelays[word]
-						if delay then
-							local extra = 0
-							local ch = plr.Character
-							local root = ch and ch:FindFirstChild("HumanoidRootPart")
-							local br = bossRoot()
-							if root and br then
-								local dx = root.Position.X - br.Position.X
-								local dz = root.Position.Z - br.Position.Z
-								local flat = math.sqrt(dx * dx + dz * dz)
-								if flat > 30 then
-									extra = math.min((flat - 30) / 75, 1.0)
-									if word == "Disappear." then
-										extra = math.min(extra, 0.45)
+						if word == "Disappear." then
+							-- Updated Disappear: the full word is the primary parry timer.
+							-- The 90516863757785 animation-stop watcher can only make it earlier.
+							disappearAt = now
+							disappearParryAt = now + 2.25
+							print("[TMS] DISAPPEAR_PRIMARY in=2.25")
+							if detectUntil == 0 and detectLateAt == 0 then armDetect(now + 6.0, bossObj) end
+						else
+							local delay = parryWordDelays[word]
+							if delay then
+								local extra = 0
+								local ch = plr.Character
+								local root = ch and ch:FindFirstChild("HumanoidRootPart")
+								local br = bossRoot()
+								if root and br then
+									local dx = root.Position.X - br.Position.X
+									local dz = root.Position.Z - br.Position.Z
+									local flat = math.sqrt(dx * dx + dz * dz)
+									if flat > 30 then
+										extra = math.min((flat - 30) / 75, 1.0)
 									end
 								end
+								parryAt = now + delay + extra
+								if detectUntil == 0 and detectLateAt == 0 then armDetect(now + 6.0, bossObj) end
 							end
-							parryAt = now + delay + extra
-							if detectUntil == 0 and detectLateAt == 0 then armDetect(now + 6.0, bossObj) end
 						end
 					end
 				else
-					if word == "Disappear." and detectUntil == 0 and detectLateAt == 0 then
-						armDetect(now + 6.0, bossObj)
+					if word == "Disappear." then
+						disappearAt = now
+						disappearParryAt = now + 2.25
+						print("[TMS] DISAPPEAR_PRIMARY in=2.25")
+						if detectUntil == 0 and detectLateAt == 0 then
+							armDetect(now + 6.0, bossObj)
+						end
 					end
 				end
 				prevTxt = txt
+			end
+			-- Live samples: the hit lands ~2.2-3.0s after the full word. The word
+			-- timer above is primary; the 90516863757785 loop is only an earlier
+			-- backup and must never replace a later primary timer.
+			local foundDisappearAnim = false
+			local humD = bossObj and bossObj:FindFirstChildOfClass("Humanoid")
+			local animD = humD and humD:FindFirstChildOfClass("Animator")
+			if animD then
+				for _, tr in ipairs(animD:GetPlayingAnimationTracks()) do
+					local anD = tr.Animation
+					local idD = anD and tostring(anD.AnimationId):match("(%d+)$")
+					if idD == "90516863757785" then
+						foundDisappearAnim = true
+						local tpD = tr.TimePosition or 0
+						local backupAt = now + 1.5
+						if disappearAnimTp and disappearAnimTp > 2.5 and tpD < 0.3
+							and disappearAt > 0 and now - disappearAt < 5
+							and now - lastDisappearStop > 2
+							and (disappearParryAt == 0 or backupAt < disappearParryAt) then
+							lastDisappearStop = now
+							disappearParryAt = backupAt
+							print("[TMS] DISAPPEAR_STOP tp=" .. string.format("%.2f", disappearAnimTp) ..
+								" parryIn=1.50 backup")
+						end
+						disappearAnimTp = tpD
+						break
+					end
+				end
+			end
+			if not foundDisappearAnim then
+				disappearAnimTp = nil
 			end
 			if state.ascend.parryEnabled and detectLateAt == 0 then
 				local humR = bossObj and bossObj:FindFirstChildOfClass("Humanoid")
@@ -10893,6 +11009,16 @@ state.ascend.run = function()
 				detectLateAt = 0
 				print("[TMS] DETECT_REFIRE n=" .. tostring(state.ascend.parries))
 			end
+			if not state.ascend.parryEnabled and disappearParryAt > 0 then
+				disappearParryAt = 0
+				disappearAt = 0
+			end
+			if state.ascend.parryEnabled and disappearParryAt > 0 and now >= disappearParryAt then
+				disappearParryAt = 0
+				disappearAt = 0
+				pressE()
+				print("[TMS] DISAPPEAR_PARRY n=" .. tostring(state.ascend.parries))
+			end
 			if state.ascend.parryEnabled and parryAt > 0 and now >= parryAt
 				and not (now < detectUntil) then
 				pressE()
@@ -10925,71 +11051,7 @@ state.ascend.run = function()
 				end
 				state.ascend.origin = nil
 			end
-			local b = workspace:FindFirstChild("Bosses") and workspace.Bosses:FindFirstChild("Ascend")
-			local ai = b and b:FindFirstChild("AI")
-			local misc = ai and ai:FindFirstChild("Stuff") and ai.Stuff:FindFirstChild("Misc")
-			local stamina = misc and misc:FindFirstChild("Stamina")
-			local stanceZero = false
-			if stamina and type(stamina.Value) == "number" then
-				stanceZero = stamina.Value <= 0
-			elseif plr:FindFirstChildOfClass("PlayerGui") then
-				local bb = plr.PlayerGui:FindFirstChild("BossBar")
-				local bar = bb and bb:FindFirstChild("MainFrame") and bb.MainFrame:FindFirstChild("BossBar")
-				bar = bar and bar:FindFirstChild("StaminaBarFrame") and bar:FindFirstChild("Bar")
-				if bar then stanceZero = bar.Size.X.Scale <= 0.01 end
-			end
-			if state.ascend.m1Enabled and stanceZero then
-				local ch = plr.Character
-				local root = ch and ch:FindFirstChild("HumanoidRootPart")
-				local br = bossRoot()
-				local tool = nil
-				if ch then
-					for _, obj in ipairs(ch:GetChildren()) do
-						if obj:IsA("Tool") then tool = obj break end
-					end
-				end
-				if root and br and tool then
-					local cam = workspace.CurrentCamera
-					if not m1Origin then
-						m1Origin = root.CFrame
-						m1Cam = cam and cam.CFrame or nil
-					end
-					local stand = br.Position + Vector3.new(6, 0, 0)
-					root.CFrame = CFrame.lookAt(stand, br.Position)
-					if cam then
-						pcall(function()
-							cam.CFrame = CFrame.lookAt(stand + Vector3.new(0, 2, 0), br.Position)
-						end)
-					end
-					if now - lastM1 >= 0.12 then
-						if TMS.replicateSignal(tool.Activated) then
-							state.ascend.m1s += 1
-						elseif pcall(function() tool:Activate() end) then
-							state.ascend.m1s += 1
-						end
-						lastM1 = now
-					end
-				end
-			elseif m1Origin then
-				local ch = plr.Character
-				local root = ch and ch:FindFirstChild("HumanoidRootPart")
-				if root then root.CFrame = m1Origin end
-				if m1Cam and workspace.CurrentCamera then
-					pcall(function() workspace.CurrentCamera.CFrame = m1Cam end)
-				end
-				m1Origin = nil
-				m1Cam = nil
-			end
-		end
-		if m1Origin then
-			local ch = plr.Character
-			local root = ch and ch:FindFirstChild("HumanoidRootPart")
-			if root then root.CFrame = m1Origin end
-			if m1Cam and workspace.CurrentCamera then
-				pcall(function() workspace.CurrentCamera.CFrame = m1Cam end)
-			end
-			m1Origin = nil
-			m1Cam = nil
+			-- Insta Kill is manual only: use the button or G.__TMS_ASCEND.instaOnce().
 		end
 		if state.ascend.origin then
 			local ch = plr.Character
@@ -11016,7 +11078,7 @@ state.uiToggles.ascendParry = SectionAscend:Toggle({
 		state.ascend.parryEnabled = v
 		if v then
 			state.ascend.run()
-		elseif not state.ascend.dodgeEnabled and not state.ascend.m1Enabled then
+		elseif not state.ascend.dodgeEnabled then
 			state.ascend.stop()
 		end
 	end,
@@ -11029,22 +11091,17 @@ state.uiToggles.ascendDodge = SectionAscend:Toggle({
 		state.ascend.dodgeEnabled = v
 		if v then
 			state.ascend.run()
-		elseif not state.ascend.parryEnabled and not state.ascend.m1Enabled then
+		elseif not state.ascend.parryEnabled then
 			state.ascend.stop()
 		end
 	end,
 })
-state.uiToggles.ascendM1 = SectionAscend:Toggle({
-	Title = "Auto Hit",
-	Value = state.ascend.m1Enabled,
-	Flag = "ascendM1V1",
-	Callback = function(v)
-		state.ascend.m1Enabled = v
-		if v then
-			state.ascend.run()
-		elseif not state.ascend.parryEnabled and not state.ascend.dodgeEnabled then
-			state.ascend.stop()
-		end
+SectionAscend:Button({
+	Title = "Insta Kill (once)",
+	Desc = "click/tap this if the boss has no bar to work",
+	Icon = "skull",
+	Callback = function()
+		state.ascend.instaOnce()
 	end,
 })
 local TabEsp = Window:Tab({ Title = "ESP", Icon = "crosshair" })
@@ -13856,7 +13913,7 @@ G.__TMS_ASCEND = {
 			if state.ascend.parryEnabled ~= v then t:Set(v) end
 		else
 			state.ascend.parryEnabled = v
-			if v then state.ascend.run() elseif not state.ascend.dodgeEnabled and not state.ascend.m1Enabled then state.ascend.stop() end
+			if v then state.ascend.run() elseif not state.ascend.dodgeEnabled then state.ascend.stop() end
 		end
 	end,
 	setDodge = function(v)
@@ -13865,17 +13922,22 @@ G.__TMS_ASCEND = {
 			if state.ascend.dodgeEnabled ~= v then t:Set(v) end
 		else
 			state.ascend.dodgeEnabled = v
-			if v then state.ascend.run() elseif not state.ascend.parryEnabled and not state.ascend.m1Enabled then state.ascend.stop() end
+			if v then state.ascend.run() elseif not state.ascend.parryEnabled then state.ascend.stop() end
 		end
 	end,
+	instaOnce = function()
+		return state.ascend.instaOnce()
+	end,
+	fire = function()
+		return state.ascend.instaOnce()
+	end,
 	setM1 = function(v)
-		local t = state.uiToggles.ascendM1
-		if t then
-			if state.ascend.m1Enabled ~= v then t:Set(v) end
-		else
-			state.ascend.m1Enabled = v
-			if v then state.ascend.run() elseif not state.ascend.parryEnabled and not state.ascend.dodgeEnabled then state.ascend.stop() end
-		end
+		if v == false then return false end
+		return state.ascend.instaOnce()
+	end,
+	setInsta = function(v)
+		if v == false then return false end
+		return state.ascend.instaOnce()
 	end,
 	state = function()
 		return {
@@ -13888,6 +13950,7 @@ G.__TMS_ASCEND = {
 			dodged = state.ascend.dodged,
 			parries = state.ascend.parries,
 			m1s = state.ascend.m1s,
+			instaKills = state.ascend.instaKills,
 			jumps = state.ascend.jumps,
 			m1Parries = state.ascend.m1Parries,
 			lastWord = state.ascend.lastWord,
@@ -13926,9 +13989,7 @@ task.spawn(function()
 	end
 	state.ascend.parryEnabled = false
 	state.ascend.dodgeEnabled = false
-	if not state.ascend.m1Enabled then
-		state.ascend.stop()
-	end
+	state.ascend.stop()
 end)
 Loading.setStage("Ready", "Opening " .. HUB_NAME, 0.98)
 Loading.close()
