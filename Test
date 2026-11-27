@@ -1412,7 +1412,11 @@ local Window = WindUI:CreateWindow({
 		Color = ColorSequence.new(Color3.fromRGB(120, 80, 255), Color3.fromRGB(255, 90, 140)),
 		OnlyMobile = false,
 		Enabled = true,
-		Draggable = true,
+		-- WindUI keeps the drag handle + title visible by default, which makes
+		-- the minimized button a long pill. OnlyIcon + Draggable=false hides
+		-- both, leaving a compact icon button that the watcher rounds to 48x48.
+		OnlyIcon = true,
+		Draggable = false,
 	},
 })
 do
@@ -1445,12 +1449,12 @@ do
 			return false
 		end
 		local drag = frame:FindFirstChild("Drag", true)
-		local troll = drag and findTrollImage(drag) or findTrollImage(frame)
-		if not troll then
+		if not drag and not tostring(frame.Name):lower():find("open", 1, true) then
 			return false
 		end
+		local troll = (drag and findTrollImage(drag)) or findTrollImage(frame)
 		if not drag then
-			drag = troll.Parent
+			drag = frame
 		end
 		if not drag or not drag:IsA("GuiObject") then
 			return false
@@ -1486,52 +1490,70 @@ do
 					obj.BackgroundTransparency = 1
 				end
 			end
-			troll.Image = TROLL_ASSET
-			troll.ImageRectSize = Vector2.new(0, 0)
-			troll.ImageRectOffset = Vector2.new(0, 0)
-			troll.ImageTransparency = 0
-			troll.ScaleType = Enum.ScaleType.Fit
-			troll.Size = UDim2.fromScale(0.8, 0.8)
-			troll.Position = UDim2.fromScale(0.5, 0.5)
-			troll.AnchorPoint = Vector2.new(0.5, 0.5)
+			if troll then
+				troll.Image = TROLL_ASSET
+				troll.ImageRectSize = Vector2.new(0, 0)
+				troll.ImageRectOffset = Vector2.new(0, 0)
+				troll.ImageTransparency = 0
+				troll.ScaleType = Enum.ScaleType.Fit
+				troll.Size = UDim2.fromScale(0.8, 0.8)
+				troll.Position = UDim2.fromScale(0.5, 0.5)
+				troll.AnchorPoint = Vector2.new(0.5, 0.5)
+			end
 		end)
 		return true
 	end
-	local function findWinduiGui()
-		if WindUI and WindUI.ScreenGui and WindUI.ScreenGui.Parent then
-			return WindUI.ScreenGui
-		end
-		local core = game:GetService("CoreGui")
-		local found = core:FindFirstChild("WindUI", true)
-		if not found then
-			pcall(function()
-				local robloxGui = core:FindFirstChild("RobloxGui")
-				found = robloxGui and robloxGui:FindFirstChild("WindUI", true)
-			end)
-		end
-		if not found then
-			local hui = TMS.getHui()
-			if hui then
-				found = hui:FindFirstChild("WindUI", true)
-				if not found and hui:IsA("ScreenGui") and hui.Name == "WindUI" then
-					found = hui
-				end
+	local winduiGuis = {}
+	local function refreshWinduiGuis()
+		local seen = {}
+		winduiGuis = {}
+		local function add(gui)
+			if gui and gui:IsA("ScreenGui") and not seen[gui] then
+				seen[gui] = true
+				winduiGuis[#winduiGuis + 1] = gui
 			end
 		end
-		return found
+		if WindUI and WindUI.ScreenGui then
+			add(WindUI.ScreenGui)
+		end
+		pcall(function()
+			for _, obj in ipairs(game:GetService("CoreGui"):GetDescendants()) do
+				if isWindUiGui(obj) then
+					add(obj)
+				end
+			end
+		end)
+		local hui = TMS.getHui()
+		if hui then
+			pcall(function()
+				if isWindUiGui(hui) then
+					add(hui)
+				end
+				for _, obj in ipairs(hui:GetDescendants()) do
+					if isWindUiGui(obj) then
+						add(obj)
+					end
+				end
+			end)
+		end
 	end
+	refreshWinduiGuis()
 	state.openBtnCircle = true
 	state.openBtnTicks = 0
 	state.openBtnApplied = 0
 	task.spawn(function()
 		while state.openBtnCircle do
 			state.openBtnTicks += 1
-			local gui = findWinduiGui()
-			local folder = gui and (gui:FindFirstChild("Window", true) or gui)
-			if folder then
-				for _, child in ipairs(folder:GetChildren()) do
-					if circleOpenButton(child) then
-						state.openBtnApplied += 1
+			if state.openBtnTicks % 25 == 1 then
+				refreshWinduiGuis()
+			end
+			for _, gui in ipairs(winduiGuis) do
+				if gui.Parent then
+					local folder = gui:FindFirstChild("Window", true) or gui
+					for _, child in ipairs(folder:GetChildren()) do
+						if circleOpenButton(child) then
+							state.openBtnApplied += 1
+						end
 					end
 				end
 			end
