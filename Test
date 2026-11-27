@@ -1297,7 +1297,11 @@ Loading.setStage(
 )
 local winduiSource = G.__TMS_WINDUI_SOURCE
 G.__TMS_WINDUI_FILE_CACHE = TMS.read("tms_windui_source.luau")
-if type(G.__TMS_WINDUI_FILE_CACHE) == "string" and #G.__TMS_WINDUI_FILE_CACHE > 1000 then
+-- Old cached WindUI builds ignore OnlyIcon/Draggable, which leaves the
+-- minimized button as a long pill. Only trust the cache if it supports them.
+if type(G.__TMS_WINDUI_FILE_CACHE) == "string"
+	and #G.__TMS_WINDUI_FILE_CACHE > 1000
+	and G.__TMS_WINDUI_FILE_CACHE:find("OnlyIcon", 1, true) then
 	winduiSource = G.__TMS_WINDUI_FILE_CACHE
 end
 if type(winduiSource) ~= "string" or #winduiSource < 1000 then
@@ -1549,10 +1553,20 @@ do
 			end
 			for _, gui in ipairs(winduiGuis) do
 				if gui.Parent then
-					local folder = gui:FindFirstChild("Window", true) or gui
-					for _, child in ipairs(folder:GetChildren()) do
-						if circleOpenButton(child) then
-							state.openBtnApplied += 1
+					local roots = { gui }
+					local windowFolder = gui:FindFirstChild("Window", true)
+					if windowFolder then
+						table.insert(roots, 1, windowFolder)
+					end
+					local scanned = {}
+					for _, root in ipairs(roots) do
+						for _, child in ipairs(root:GetChildren()) do
+							if not scanned[child] then
+								scanned[child] = true
+								if circleOpenButton(child) then
+									state.openBtnApplied += 1
+								end
+							end
 						end
 					end
 				end
