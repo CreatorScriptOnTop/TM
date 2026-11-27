@@ -1416,102 +1416,128 @@ local Window = WindUI:CreateWindow({
 	},
 })
 do
-	local function circleOpenButton(frame)
-		if not frame or not frame:IsA("Frame") then
-			return
+	local function findTrollImage(root)
+		if not root then
+			return nil
 		end
-		if frame.Size.Y.Offset < 30 or frame.Size.Y.Offset > 60 then
-			return
+		local assetText = tostring(TROLL_ASSET)
+		for _, obj in ipairs(root:GetDescendants()) do
+			if obj:IsA("ImageLabel") or obj:IsA("ImageButton") then
+				local imageText = tostring(obj.Image or "")
+				if imageText == assetText
+					or imageText:lower():find("tms_trollface", 1, true)
+					or assetText:lower():find("tms_trollface", 1, true) then
+					return obj
+				end
+			end
+		end
+		return nil
+	end
+	local function circleOpenButton(frame)
+		if not frame or not frame:IsA("GuiObject") then
+			return false
+		end
+		-- Use AbsoluteSize so this also catches scaled mobile buttons whose
+		-- Size.Offset is 0. The open button is a small bar; the main window is
+		-- hundreds of pixels tall and will not pass this check.
+		local abs = frame.AbsoluteSize
+		if abs.Y < 28 or abs.Y > 80 or abs.X < 28 then
+			return false
 		end
 		local drag = frame:FindFirstChild("Drag", true)
+		local troll = drag and findTrollImage(drag) or findTrollImage(frame)
+		if not troll then
+			return false
+		end
 		if not drag then
-			return
+			drag = troll.Parent
 		end
-		local troll = drag:FindFirstChildOfClass("ImageLabel")
-		local trollOk = troll ~= nil and (
-			tostring(troll.Image):find("tms_trollface", 1, true)
-			or tostring(troll.Image) == tostring(TROLL_ASSET)
-		)
-		if not trollOk then
-			return
+		if not drag or not drag:IsA("GuiObject") then
+			return false
 		end
-		frame.Size = UDim2.fromOffset(48, 48)
-		local rootCorner = frame:FindFirstChildOfClass("UICorner")
-		if not rootCorner then
-			rootCorner = Instance.new("UICorner")
-			rootCorner.Parent = frame
-		end
-		rootCorner.CornerRadius = UDim.new(1, 0)
-		local inner = frame:FindFirstChild("Frame")
-		if inner then
-			inner.Size = UDim2.fromScale(1, 1)
-			inner.Position = UDim2.fromScale(0, 0)
-			local innerCorner = inner:FindFirstChildOfClass("UICorner")
-			if innerCorner then
-				innerCorner.CornerRadius = UDim.new(1, 0)
+		pcall(function()
+			frame.Size = UDim2.fromOffset(48, 48)
+			frame.ClipsDescendants = true
+			local rootCorner = frame:FindFirstChildOfClass("UICorner")
+			if not rootCorner then
+				rootCorner = Instance.new("UICorner")
+				rootCorner.Parent = frame
 			end
-			local layout = inner:FindFirstChildOfClass("UIListLayout")
+			rootCorner.CornerRadius = UDim.new(1, 0)
+			for _, obj in ipairs(frame:GetDescendants()) do
+				if obj:IsA("UICorner") then
+					obj.CornerRadius = UDim.new(1, 0)
+				end
+			end
+			local layout = frame:FindFirstChildOfClass("UIListLayout", true)
 			if layout then
-				pcall(function()
-					layout:Destroy()
-				end)
+				layout:Destroy()
 			end
-			local titleRow = inner:FindFirstChildOfClass("TextButton")
-			if titleRow then
-				titleRow.Visible = true
-				titleRow.Size = UDim2.fromScale(1, 1)
-				titleRow.Position = UDim2.fromScale(0, 0)
-				titleRow.BackgroundTransparency = 1
-				local titleCorner = titleRow:FindFirstChildOfClass("UICorner")
-				if titleCorner then
-					titleCorner.CornerRadius = UDim.new(1, 0)
-				end
-				for _, child in ipairs(titleRow:GetChildren()) do
-					if child:IsA("GuiObject") then
-						child.Visible = false
-					end
+			drag.Size = UDim2.fromScale(1, 1)
+			drag.Position = UDim2.fromScale(0, 0)
+			if drag ~= frame then
+				drag.BackgroundTransparency = 1
+			end
+			for _, obj in ipairs(frame:GetDescendants()) do
+				if obj:IsA("TextLabel") then
+					obj.Visible = false
+				elseif obj:IsA("TextButton") and obj ~= frame then
+					obj.Text = ""
+					obj.BackgroundTransparency = 1
 				end
 			end
-			for _, child in ipairs(inner:GetChildren()) do
-				if child:IsA("Frame") and child ~= drag then
-					child.Visible = false
-				end
-			end
-		end
-		drag.Size = UDim2.fromScale(1, 1)
-		drag.Position = UDim2.fromScale(0, 0)
-		troll.Image = TROLL_ASSET
-		troll.ImageRectSize = Vector2.new(0, 0)
-		troll.ImageRectOffset = Vector2.new(0, 0)
-		troll.ImageTransparency = 0
-		troll.ScaleType = Enum.ScaleType.Fit
-		troll.Size = UDim2.fromScale(0.8, 0.8)
-		troll.Position = UDim2.fromScale(0.5, 0.5)
-		troll.AnchorPoint = Vector2.new(0.5, 0.5)
+			troll.Image = TROLL_ASSET
+			troll.ImageRectSize = Vector2.new(0, 0)
+			troll.ImageRectOffset = Vector2.new(0, 0)
+			troll.ImageTransparency = 0
+			troll.ScaleType = Enum.ScaleType.Fit
+			troll.Size = UDim2.fromScale(0.8, 0.8)
+			troll.Position = UDim2.fromScale(0.5, 0.5)
+			troll.AnchorPoint = Vector2.new(0.5, 0.5)
+		end)
 		return true
 	end
-	local winduiGui = game:GetService("CoreGui").RobloxGui:FindFirstChild("WindUI")
-	local windowFolder = winduiGui and winduiGui:FindFirstChild("Window")
-	if windowFolder then
-		state.openBtnCircle = true
-		state.openBtnTicks = 0
-		state.openBtnApplied = 0
-		task.spawn(function()
-			while state.openBtnCircle do
-				state.openBtnTicks += 1
-				local gui = game:GetService("CoreGui").RobloxGui:FindFirstChild("WindUI")
-				local folder = gui and gui:FindFirstChild("Window")
-				if folder then
-					for _, child in ipairs(folder:GetChildren()) do
-						if circleOpenButton(child) then
-							state.openBtnApplied += 1
-						end
+	local function findWinduiGui()
+		if WindUI and WindUI.ScreenGui and WindUI.ScreenGui.Parent then
+			return WindUI.ScreenGui
+		end
+		local core = game:GetService("CoreGui")
+		local found = core:FindFirstChild("WindUI", true)
+		if not found then
+			pcall(function()
+				local robloxGui = core:FindFirstChild("RobloxGui")
+				found = robloxGui and robloxGui:FindFirstChild("WindUI", true)
+			end)
+		end
+		if not found then
+			local hui = TMS.getHui()
+			if hui then
+				found = hui:FindFirstChild("WindUI", true)
+				if not found and hui:IsA("ScreenGui") and hui.Name == "WindUI" then
+					found = hui
+				end
+			end
+		end
+		return found
+	end
+	state.openBtnCircle = true
+	state.openBtnTicks = 0
+	state.openBtnApplied = 0
+	task.spawn(function()
+		while state.openBtnCircle do
+			state.openBtnTicks += 1
+			local gui = findWinduiGui()
+			local folder = gui and (gui:FindFirstChild("Window", true) or gui)
+			if folder then
+				for _, child in ipairs(folder:GetChildren()) do
+					if circleOpenButton(child) then
+						state.openBtnApplied += 1
 					end
 				end
-				task.wait(0.4)
 			end
-		end)
-	end
+			task.wait(0.4)
+		end
+	end)
 end
 do
 	Loading.setStage("Finishing menu", "Adding tabs and toggles...", 0.9)
