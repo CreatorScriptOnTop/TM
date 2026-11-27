@@ -1039,7 +1039,11 @@ for _, flag in ipairs({ "MOBILE", "IS_MOBILE", "MOBILE_EXECUTOR", "DELTA_LOADED"
 	end
 end
 local DEVICE_LABEL = IS_MOBILE and "Mobile" or "PC"
-local DISPLAY_NAME = HUB_NAME .. " [" .. EXECUTOR_NAME .. " / " .. DEVICE_LABEL .. "]"
+local VERSION = "v1"
+local DISPLAY_NAME = HUB_NAME .. " " .. VERSION .. " [" .. EXECUTOR_NAME .. " / " .. DEVICE_LABEL .. "]"
+pcall(function()
+	G.__TMS_VERSION = VERSION
+end)
 Loading.setIdentity(EXECUTOR_NAME, DEVICE_LABEL, DISPLAY_NAME)
 Loading.setStage("Starting", "Executor: " .. EXECUTOR_NAME .. "  |  " .. DEVICE_LABEL, 0.08)
 local state = {
