@@ -3871,8 +3871,9 @@ local function sellerLineStuck(snapshot)
 		local value = line:match("=([^\n]*)$") or ""
 		value = string.gsub(value, "^%s+", "")
 		value = string.gsub(value, "%s+$", "")
+		local last = value:sub(-1)
 		if value ~= "" and #value <= 2
-			and not string.find(value, "[%.%?%!]%s*$") then
+			and last ~= "." and last ~= "?" and last ~= "!" then
 			return true, value
 		end
 	end
