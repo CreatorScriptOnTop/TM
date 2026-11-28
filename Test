@@ -3754,48 +3754,68 @@ local function markSell(stage, extra)
 end
 
 -- The seller types every line one character at a time ("Want to sell
--- something?", then a different line after the sale). Any synthetic touch
+-- something?", then a different line after the sale). Any synthetic input
 -- while a line is typing aborts the typewriter and leaves it stuck at the
--- first letter ("W" / "H"). Watch the actual Text properties so we can move
--- as soon as typing stops instead of burning a fixed 5 seconds every time.
--- If typing has not started at all, still wait long enough to catch a late
--- line before giving up.
-local function waitForSellerDialog(root, noChangeTimeout, maxWait)
-	markSell("dialog-wait-enter")
-	if not root then
-		return true
+-- first letter, so the Nevermind button never appears. Watch the real Text
+-- values by polling instead of connecting only to objects that exist when
+-- this starts: on mobile the final dialog is created later in a different
+-- ScreenGui, which the old watcher missed entirely.
+local function dialogSnapshot(root)
+	local parts = {}
+	local function collect(r)
+		if typeof(r) ~= "Instance" then
+			return
+		end
+		pcall(function()
+			for _, obj in ipairs(r:GetDescendants()) do
+				if typeof(obj) == "Instance"
+					and (obj:IsA("TextLabel") or obj:IsA("TextButton")) then
+					local text = tostring(obj.Text or "")
+					if text ~= "" then
+						parts[#parts + 1] = obj:GetFullName() .. "=" .. text
+					end
+				end
+			end
+		end)
 	end
-	noChangeTimeout = noChangeTimeout or 6.0
-	maxWait = maxWait or 6.5
-	local conns = {}
-	local start = os.clock()
-	local lastChange = start
-	local seenChange = false
+	collect(root)
 	pcall(function()
-		for _, obj in ipairs(root:GetDescendants()) do
-			if typeof(obj) == "Instance"
-				and (obj:IsA("TextLabel") or obj:IsA("TextButton")) then
-				conns[#conns + 1] = obj:GetPropertyChangedSignal("Text"):Connect(function()
-					lastChange = os.clock()
-					seenChange = true
-				end)
+		for _, child in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
+			if typeof(child) == "Instance" and child:IsA("LayerCollector")
+				and child ~= root then
+				local name = tostring(child.Name)
+				if not string.find(string.upper(name), "TMS", 1, true) then
+					collect(child)
+				end
 			end
 		end
 	end)
+	table.sort(parts)
+	return table.concat(parts, "\n")
+end
+local function waitForSellerDialog(root, noChangeTimeout, maxWait)
+	markSell("dialog-wait-enter")
+	noChangeTimeout = noChangeTimeout or 6.0
+	maxWait = maxWait or 6.5
+	local start = os.clock()
+	local lastChange = start
+	local lastText = dialogSnapshot(root)
+	local seenChange = false
 	while os.clock() - start < maxWait do
 		task.wait(0.05)
+		local now = dialogSnapshot(root)
+		if now ~= lastText then
+			lastText = now
+			lastChange = os.clock()
+			seenChange = true
+		end
 		local quiet = os.clock() - lastChange
-		if seenChange and quiet >= 0.2 then
+		if seenChange and quiet >= 0.25 then
 			break
 		end
 		if not seenChange and quiet >= noChangeTimeout then
 			break
 		end
-	end
-	for _, conn in ipairs(conns) do
-		pcall(function()
-			conn:Disconnect()
-		end)
 	end
 	markSell(seenChange and "dialog-wait-adaptive" or "dialog-wait-timeout")
 	return true
@@ -4169,7 +4189,7 @@ function closeShop(main)
 			-- typewriter. Wait for the new "Nevermind" state before the next
 			-- pass, otherwise the second exit is still hidden.
 			if not shopClosed() then
-				waitForSellerDialog(gui, 0.6, 2.5)
+				waitForSellerDialog(gui, IS_MOBILE and 1.2 or 0.6, IS_MOBILE and 5 or 2.5)
 			end
 			task.wait(IS_MOBILE and 0.3 or 0.2)
 		end
@@ -4232,7 +4252,7 @@ function closeShop(main)
 	-- Same path on PC and touch: wait out the typewriter, then activate the
 	-- real close button through Roblox's native selection. Flipping
 	-- SkipDialogs or calling :Fire() on the handler both abort the typewriter.
-	waitForSellerDialog(gui, 1.5, 3)
+	waitForSellerDialog(gui, IS_MOBILE and 2.5 or 1.5, IS_MOBILE and 5 or 3)
 	markSell("close-wait-done")
 	task.wait(0.08)
 	navTrace = walkExitButtons()
@@ -4289,12 +4309,12 @@ function closeShop(main)
 		if not chosen then
 			-- The final Nevermind can still be hidden while its own dialog
 			-- types out. Wait once more, then re-scan within this bounded loop.
-			waitForSellerDialog(gui, 0.8, 3)
+			waitForSellerDialog(gui, IS_MOBILE and 1.2 or 0.8, IS_MOBILE and 5 or 3)
 			task.wait(IS_MOBILE and 0.2 or 0.1)
 			continue
 		end
 		nativeFired[chosenKey] = true
-		waitForSellerDialog(topLayerOf(chosen), 0.8, 3)
+		waitForSellerDialog(topLayerOf(chosen), IS_MOBILE and 1.2 or 0.8, IS_MOBILE and 5 or 3)
 		pcall(function()
 			GuiService.SelectedObject = chosen
 		end)
