@@ -3896,7 +3896,14 @@ local function waitForSellerLine(maxWait)
 			break
 		end
 	end
-	local stuck, value = sellerLineStuck(sellerLineSnapshot())
+	local snap = sellerLineSnapshot()
+	local stuck, value = sellerLineStuck(snap)
+	pcall(function()
+		G.__TMS_SELL_LINE_SNAPSHOT = snap
+		G.__TMS_SELL_LINE_STUCK = stuck
+		G.__TMS_SELL_LINE_VALUE = value
+	end)
+	print("[TMS] SELL LINE SNAPSHOT:\n" .. snap)
 	markSell(stuck and "sell-line-stuck" or "sell-line-clear", value)
 	return not stuck
 end
