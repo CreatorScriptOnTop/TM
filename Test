@@ -3801,91 +3801,6 @@ local function waitForSellerDialog(root, noChangeTimeout, maxWait)
 	return true
 end
 
--- The final seller dialog can live in a different ScreenGui from Shopguis.
--- Poll real TextLabels/TextButtons across non-hub GUIs, but ignore the shop's
--- own selection controls and unrelated menus. This game puts typed dialog
--- lines inside child labels of buttons, so a GuiButton ancestor must NOT be
--- skipped here, otherwise the final "H..." line is invisible to the watcher.
-local DIALOG_SKIP_GUIS = {
-	CustomLeaderboard = true,
-	Tutorials = true,
-	menu = true,
-	RageBar = true,
-	["Health Indicator"] = true,
-	BackpackGui = true,
-	TopbarStandardClipped = true,
-}
-local function dialogSnapshotAll()
-	local parts = {}
-	local function collect(root)
-		pcall(function()
-			for _, obj in ipairs(root:GetDescendants()) do
-				if typeof(obj) == "Instance"
-					and (obj:IsA("TextLabel") or obj:IsA("TextButton")) then
-					local node, skip = obj, false
-					while typeof(node) == "Instance" and node ~= LocalPlayer.PlayerGui do
-						local name = tostring(node.Name)
-						if name == "SellSelections"
-							or name == "ButtonSelections"
-							or name == "ScrollingFrame"
-							or name == "MainShop" then
-							skip = true
-							break
-						end
-						node = node.Parent
-					end
-					if not skip then
-						local text = tostring(obj.Text or "")
-						if text ~= "" then
-							parts[#parts + 1] = obj:GetFullName() .. "=" .. text
-						end
-					end
-				end
-			end
-		end)
-	end
-	pcall(function()
-		for _, child in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
-			if typeof(child) == "Instance" and child:IsA("LayerCollector") then
-				local name = tostring(child.Name)
-				if not string.find(string.upper(name), "TMS", 1, true)
-					and not DIALOG_SKIP_GUIS[name] then
-					collect(child)
-				end
-			end
-		end
-	end)
-	table.sort(parts)
-	return table.concat(parts, "\n")
-end
-local function waitForDialogText(noChangeTimeout, maxWait)
-	noChangeTimeout = noChangeTimeout or 1.5
-	maxWait = maxWait or 5
-	local start = os.clock()
-	local lastChange = start
-	local last = dialogSnapshotAll()
-	local seen = false
-	local changes = 0
-	while os.clock() - start < maxWait do
-		task.wait(0.05)
-		local now = dialogSnapshotAll()
-		if now ~= last then
-			last = now
-			lastChange = os.clock()
-			seen = true
-			changes = changes + 1
-		end
-		if seen and os.clock() - lastChange >= 0.3 then
-			break
-		end
-		if not seen and os.clock() - lastChange >= noChangeTimeout then
-			break
-		end
-	end
-	markSell(seen and "dialog-all-adaptive" or "dialog-all-timeout", "changes=" .. changes)
-	return true
-end
-
 local function backpackCount()
 	local backpack = LocalPlayer:FindFirstChild("Backpack")
 	local n = 0
@@ -4254,11 +4169,7 @@ function closeShop(main)
 			-- typewriter. Wait for the new "Nevermind" state before the next
 			-- pass, otherwise the second exit is still hidden.
 			if not shopClosed() then
-				if IS_MOBILE then
-					waitForDialogText(1.2, 5)
-				else
-					waitForSellerDialog(gui, 0.6, 2.5)
-				end
+				waitForSellerDialog(gui, 0.6, 2.5)
 			end
 			task.wait(IS_MOBILE and 0.3 or 0.2)
 		end
@@ -4321,11 +4232,7 @@ function closeShop(main)
 	-- Same path on PC and touch: wait out the typewriter, then activate the
 	-- real close button through Roblox's native selection. Flipping
 	-- SkipDialogs or calling :Fire() on the handler both abort the typewriter.
-	if IS_MOBILE then
-		waitForDialogText(2.5, 5)
-	else
-		waitForSellerDialog(gui, 1.5, 3)
-	end
+	waitForSellerDialog(gui, 1.5, 3)
 	markSell("close-wait-done")
 	task.wait(0.08)
 	navTrace = walkExitButtons()
@@ -4498,16 +4405,20 @@ local function runSellOnce()
 				failed[#failed + 1] = name .. " (nothing sold)"
 			end
 			if IS_MOBILE then
-				-- Let this sale's seller line finish before the next cup click.
-				waitForDialogText(1.5, 5)
+				-- Delta does not reliably expose the seller's final typewriter
+				-- through PlayerGui. Keep the old Sellall/Sell presses, then
+				-- hold input until the line is certainly done before the next
+				-- cup click can abort it at "H".
+				markSell("sell-line-quiet", name)
+				task.wait(2.5)
 			end
 		end
 	end)
 	markSell("sell-loop-end", ok and "ok" or tostring(message))
-	-- Give the seller/game time to finish the last sale line before navigating
-	-- the exit buttons. PC keeps the original fixed wait.
+	-- PC keeps the original 1.5s wait; mobile gets the same safety window.
 	if IS_MOBILE then
-		waitForDialogText(2.5, 5)
+		markSell("sell-pre-close-quiet")
+		task.wait(2.5)
 	else
 		task.wait(1.5)
 	end
