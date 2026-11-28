@@ -4040,14 +4040,12 @@ local function openShop(timeoutSeconds)
 		for _ = 1, 10 do
 			local gui = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
 			local frame = gui and gui:FindFirstChild("MainsFrame")
-			if frame then
-				local ok, enabled = pcall(function()
-					return gui.Enabled
-				end)
-				if ok and enabled and frame.Visible and hasDialogText(frame) then
-					markSell("open-got")
-					return frame
-				end
+			if frame and frame.Visible then
+				-- The shop can be usable while Enabled is false or before
+				-- Thedialogs has text. Accept the real visible frame and let
+				-- the seller-line guard handle typing afterward.
+				markSell("open-got", hasDialogText(frame) and "dialog" or "no-dialog")
+				return frame
 			end
 			task.wait(0.1)
 		end
