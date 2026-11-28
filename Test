@@ -87,7 +87,10 @@ end
 local IS_DELTA = executorFlag("DELTA_LOADED") ~= nil
 	or executorFlag("__DELTA_LOADED") ~= nil
 	or executorFlag("delta") ~= nil
-local IS_MOBILE = UserInputService.TouchEnabled or IS_DELTA
+-- Test override: set getgenv().__TMS_FORCE_MOBILE = true before loading to
+-- exercise the mobile sell path on PC. Normal loads are unaffected.
+local FORCE_MOBILE = (type(getgenv) == "function" and getgenv().__TMS_FORCE_MOBILE == true) or false
+local IS_MOBILE = FORCE_MOBILE or UserInputService.TouchEnabled or IS_DELTA
 local Loading = (function()
 	local gui, card, titleLabel, subtitleLabel, statusLabel, fill
 	local currentDisplayName = HUB_NAME
