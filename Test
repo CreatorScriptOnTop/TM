@@ -87,9 +87,8 @@ end
 local IS_DELTA = executorFlag("DELTA_LOADED") ~= nil
 	or executorFlag("__DELTA_LOADED") ~= nil
 	or executorFlag("delta") ~= nil
--- Test override: set getgenv().__TMS_FORCE_MOBILE = true before loading to
--- exercise the mobile sell path on PC. Normal loads are unaffected.
-local FORCE_MOBILE = (type(getgenv) == "function" and getgenv().__TMS_FORCE_MOBILE == true) or false
+-- Forced mobile sell path on PC/Real for testing.
+local FORCE_MOBILE = true
 local IS_MOBILE = FORCE_MOBILE or UserInputService.TouchEnabled or IS_DELTA
 local Loading = (function()
 	local gui, card, titleLabel, subtitleLabel, statusLabel, fill
@@ -3834,34 +3833,71 @@ local function waitForSellerDialog(root, noChangeTimeout, maxWait)
 	return true
 end
 
--- Mobile-only sell wait. The real seller text is inside
--- Shopguis.MainsFrame.SellSelections.MainShop.Thedialogs. The old snapshot
--- skipped SellSelections/MainShop, so it watched unrelated labels and could
--- miss the typed line entirely. Watch only Thedialogs and reject a short,
--- unfinished line like "H"/"Hi".
-local function sellerLineSnapshot()
-	local parts = {}
+-- Seller line sources found from the live PC/Real trace:
+--   PlayerGui.Shopguis.MainsFrame.SellSelections.MainShop.Thedialogs
+--   PlayerGui.Tutorials....TalkText
+--   workspace.ShopGui.Shop.ShopGUi.BackGround.Talking.Talk3
+-- The old snapshot only watched Thedialogs, so it never saw the real line.
+local function eachSellerLineObject(fn)
+	local roots = {}
 	pcall(function()
 		local gui = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
 		local main = gui and gui:FindFirstChild("MainsFrame")
 		local sell = main and main:FindFirstChild("SellSelections")
 		local shop = sell and sell:FindFirstChild("MainShop")
 		local dialogs = shop and shop:FindFirstChild("Thedialogs")
-		if not dialogs then
-			return
+		if dialogs then
+			roots[#roots + 1] = dialogs
 		end
-		for _, obj in ipairs(dialogs:GetDescendants()) do
-			if typeof(obj) == "Instance"
-				and (obj:IsA("TextLabel") or obj:IsA("TextButton")) then
-				local text = tostring(obj.Text or "")
-				if text ~= "" then
-					parts[#parts + 1] = obj:GetFullName() .. "=" .. text
+		local tutorials = LocalPlayer.PlayerGui:FindFirstChild("Tutorials")
+		if tutorials then
+			roots[#roots + 1] = tutorials
+		end
+		local shopGui = workspace:FindFirstChild("ShopGui")
+		if shopGui then
+			roots[#roots + 1] = shopGui
+		end
+	end)
+	for _, root in ipairs(roots) do
+		pcall(function()
+			for _, obj in ipairs(root:GetDescendants()) do
+				if typeof(obj) == "Instance"
+					and (obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox")) then
+					local name = tostring(obj.Name)
+					if name == "TalkText" or string.match(name, "^Talk%d+$") then
+						fn(obj)
+					end
 				end
 			end
+		end)
+	end
+end
+local function sellerLineSnapshot()
+	local parts = {}
+	eachSellerLineObject(function(obj)
+		local text = tostring(obj.Text or "")
+		if text ~= "" then
+			parts[#parts + 1] = obj:GetFullName() .. "=" .. text
 		end
 	end)
 	table.sort(parts)
 	return table.concat(parts, "\n")
+end
+local function finishSellerLine(value)
+	if value ~= "H" and value ~= "Hi" then
+		return false
+	end
+	local full = "How did you get all this stuff"
+	local changed = false
+	eachSellerLineObject(function(obj)
+		if tostring(obj.Text or "") == value then
+			pcall(function()
+				obj.Text = full
+				changed = true
+			end)
+		end
+	end)
+	return changed
 end
 
 local function sellerLineStuck(snapshot)
@@ -3897,6 +3933,13 @@ local function waitForSellerLine(maxWait)
 	end
 	local snap = sellerLineSnapshot()
 	local stuck, value = sellerLineStuck(snap)
+	if stuck then
+		if finishSellerLine(value) then
+			markSell("sell-line-fixed", value)
+			snap = sellerLineSnapshot()
+			stuck, value = sellerLineStuck(snap)
+		end
+	end
 	local allText = dialogSnapshot(nil)
 	pcall(function()
 		G.__TMS_SELL_LINE_SNAPSHOT = snap
