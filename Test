@@ -3922,10 +3922,10 @@ local function openShop(timeoutSeconds)
 	local mapFolder = workspace:FindFirstChild("Map folder")
 	local seller = mapFolder and mapFolder:FindFirstChild("Seller")
 	local npc = seller and seller:FindFirstChild("Liltroll")
-	local npcPath = "Map folder.Seller.Liltroll"
 	if not npc then
-		-- The game's own dialog script expects this exact path. If it spawned
-		-- late, opening early leaves its typewriter broken at "H"/"Hi".
+		-- The game's own dialog script expects this exact path. The fallback
+		-- "lil troll.Liltroll" has no working dialog handler and leaves the
+		-- seller line frozen at "H"/"Hi", so never use it.
 		local deadline = os.clock() + 5
 		while os.clock() < deadline do
 			task.wait(0.1)
@@ -3938,15 +3938,10 @@ local function openShop(timeoutSeconds)
 		end
 	end
 	if not npc then
-		local lilTroll = workspace:FindFirstChild("lil troll")
-		npc = lilTroll and lilTroll:FindFirstChild("Liltroll")
-		npcPath = "lil troll.Liltroll"
-	end
-	if not npc then
 		markSell("open-seller-missing")
-		return nil, "the seller is not loaded"
+		return nil, "the seller NPC is missing - rejoin a new server"
 	end
-	markSell("open-npc", npcPath)
+	markSell("open-npc", "Map folder.Seller.Liltroll")
 	local part = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
 	if part then
 		pcall(function()
