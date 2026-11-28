@@ -3707,6 +3707,16 @@ local function pressEnter()
 	end)
 	return ok
 end
+local function pressE()
+	local ok = pcall(function()
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+	end)
+	task.wait(0.05)
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+	end)
+	return ok
+end
 local function selectWith(button)
 	if not button then
 		return false
@@ -3950,85 +3960,96 @@ local function openShop(timeoutSeconds)
 		return ok and found
 	end
 
-	local function sellerCandidates()
-		local found = {}
+	local function findSeller()
+		local found, path
 		pcall(function()
-			local mapFolder = workspace:FindFirstChild("Map folder")
-			local seller = mapFolder and mapFolder:FindFirstChild("Seller")
-			if not seller then
+			local lilTroll = workspace:FindFirstChild("lil troll")
+			found = lilTroll and lilTroll:FindFirstChild("Liltroll")
+			if found then
+				path = "lil troll.Liltroll"
 				return
 			end
-			local rank = { him = 1, Hunter = 2, Liltroll = 3 }
-			for _, child in ipairs(seller:GetChildren()) do
-				local prompt
-				for _, d in ipairs(child:GetDescendants()) do
-					if d:IsA("ProximityPrompt") then
-						prompt = d
-						break
-					end
-				end
-				if prompt then
-					found[#found + 1] = {
-						npc = child,
-						prompt = prompt,
-						part = child:IsA("BasePart") and child or child:FindFirstChildWhichIsA("BasePart", true),
-						path = child:GetFullName(),
-						order = rank[child.Name] or 99,
-					}
+			for _, o in ipairs(workspace:GetDescendants()) do
+				if o.Name == "Liltroll" then
+					found = o
+					path = o:GetFullName()
+					return
 				end
 			end
 		end)
-		table.sort(found, function(a, b)
-			return a.order < b.order
-		end)
-		return found
+		return found, path
 	end
 
-	local npcs = sellerCandidates()
-	if #npcs == 0 then
+	local npc, npcPath = findSeller()
+	if not npc then
 		local waitDeadline = os.clock() + 5
-		while os.clock() < waitDeadline and #npcs == 0 do
+		while os.clock() < waitDeadline do
 			task.wait(0.1)
-			npcs = sellerCandidates()
+			npc, npcPath = findSeller()
+			if npc then
+				break
+			end
 		end
 	end
-	if #npcs == 0 then
+	if not npc then
 		markSell("open-seller-missing")
 		return nil, "the seller NPC is missing - rejoin a new server"
 	end
+	markSell("open-npc", npcPath)
 
-	for _, candidate in ipairs(npcs) do
-		markSell("open-npc", candidate.path)
-		if candidate.part then
-			pcall(function()
-				root.CFrame = candidate.part.CFrame + Vector3.new(0, 3, 0)
-			end)
-			task.wait(0.25)
+	local prompt, part
+	for _, d in ipairs(npc:GetDescendants()) do
+		if d:IsA("ProximityPrompt") then
+			prompt = d
+			part = d:FindFirstChildWhichIsA("BasePart", true)
+			break
 		end
+	end
+	if not prompt then
+		return nil, "the seller has no prompt"
+	end
+	part = part or (npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true))
+	if part then
 		pcall(function()
-			candidate.prompt.HoldDuration = 0
-			candidate.prompt.RequiresLineOfSight = false
+			root.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0), part.Position)
 		end)
-		local deadline = os.clock() + (timeoutSeconds or 8)
-		local attempt = 0
-		while os.clock() < deadline do
-			attempt = attempt + 1
-			markSell("open-prompt", attempt)
-			pcall(FIRE_PROMPT, candidate.prompt)
-			for _ = 1, 10 do
-				local gui = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
-				local frame = gui and gui:FindFirstChild("MainsFrame")
-				if frame then
-					local ok, enabled = pcall(function()
-						return gui.Enabled
-					end)
-					if ok and enabled and frame.Visible and hasDialogText(frame) then
-						markSell("open-got")
-						return frame
-					end
+		task.wait(0.3)
+	end
+	pcall(function()
+		prompt.HoldDuration = 0
+		prompt.RequiresLineOfSight = false
+	end)
+
+	-- Manual E works, but exploit-style :Fire()/fireproximityprompt breaks the
+	-- game's dialog handler. Use real key input first, then the engine's own
+	-- InputHold path as a fallback.
+	local deadline = os.clock() + (timeoutSeconds or 8)
+	local attempt = 0
+	while os.clock() < deadline do
+		attempt = attempt + 1
+		markSell("open-prompt", attempt <= 3 and (tostring(attempt) .. ":E") or (tostring(attempt) .. ":hold"))
+		if attempt <= 3 then
+			pressE()
+		else
+			pcall(function()
+				prompt:InputHoldBegin()
+				task.wait(0.05)
+				prompt:InputHoldEnd()
+			end)
+		end
+		for _ = 1, 10 do
+			local gui = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
+			local frame = gui and gui:FindFirstChild("MainsFrame")
+			if frame then
+				local ok, enabled = pcall(function()
+					return gui.Enabled
+				end)
+				if ok and enabled and frame.Visible and hasDialogText(frame) then
+					markSell("open-got")
+					return frame
 				end
-				task.wait(0.1)
 			end
+			task.wait(0.1)
 		end
 	end
 	return nil, "the shop did not open"
