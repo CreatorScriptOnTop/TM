@@ -3919,84 +3919,116 @@ local function openShop(timeoutSeconds)
 	if not root then
 		return nil, "no character"
 	end
-	local mapFolder = workspace:FindFirstChild("Map folder")
-	local seller = mapFolder and mapFolder:FindFirstChild("Seller")
-	local npc = seller and seller:FindFirstChild("Liltroll")
-	if not npc then
-		-- The game's own dialog script expects this exact path. The fallback
-		-- "lil troll.Liltroll" has no working dialog handler and leaves the
-		-- seller line frozen at "H"/"Hi", so never use it.
-		local deadline = os.clock() + 5
-		while os.clock() < deadline do
-			task.wait(0.1)
-			mapFolder = workspace:FindFirstChild("Map folder")
-			seller = mapFolder and mapFolder:FindFirstChild("Seller")
-			npc = seller and seller:FindFirstChild("Liltroll")
-			if npc then
-				break
-			end
-		end
-	end
-	if not npc then
-		markSell("open-seller-missing")
-		return nil, "the seller NPC is missing - rejoin a new server"
-	end
-	markSell("open-npc", "Map folder.Seller.Liltroll")
-	local part = npc:IsA("BasePart") and npc or npc:FindFirstChildWhichIsA("BasePart", true)
-	if part then
-		pcall(function()
-			root.CFrame = part.CFrame + Vector3.new(0, 3, 0)
-		end)
-		task.wait(0.1)
-	end
-	local prompt
-	for _, d in ipairs(npc:GetDescendants()) do
-		if d:IsA("ProximityPrompt") then
-			prompt = d
-			break
-		end
-	end
-	if not prompt then
-		return nil, "the seller has no prompt"
-	end
-	pcall(function()
-		prompt.HoldDuration = 0
-		prompt.RequiresLineOfSight = false
-	end)
-	local stale = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
-	if stale then
-		local staleFrame = stale:FindFirstChild("MainsFrame")
+
+	local staleGui = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
+	if staleGui then
+		local staleFrame = staleGui:FindFirstChild("MainsFrame")
 		if staleFrame then
 			closeShop(staleFrame)
 		end
-		if LocalPlayer.PlayerGui:FindFirstChild("Shopguis") then
-			pcall(function()
-				stale:Destroy()
-			end)
-		end
-		task.wait(0.12)
+		task.wait(0.2)
 	end
-	-- One prompt fire right after teleport is sometimes ignored by the game
-	-- (the character is still settling). Retry until the GUI actually appears.
-	local deadline = os.clock() + (timeoutSeconds or 8)
-	local attempt = 0
-	while os.clock() < deadline do
-		attempt = attempt + 1
-		markSell("open-prompt", attempt)
-		pcall(FIRE_PROMPT, prompt)
-		for _ = 1, 6 do
-			local gui = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
-			local frame = gui and gui:FindFirstChild("MainsFrame")
-			if frame then
-				local ok, enabled = pcall(function()
-					return gui.Enabled
-				end)
-				if ok and enabled and frame.Visible then
-					markSell("open-got")
-					return frame
+
+	local function hasDialogText(frame)
+		local ok, found = pcall(function()
+			local sellFrame = frame:FindFirstChild("SellSelections")
+			local mainShop = sellFrame and sellFrame:FindFirstChild("MainShop")
+			local dialogs = mainShop and mainShop:FindFirstChild("Thedialogs")
+			if not dialogs then
+				return false
+			end
+			for _, o in ipairs(dialogs:GetDescendants()) do
+				if typeof(o) == "Instance"
+					and (o:IsA("TextLabel") or o:IsA("TextButton")) then
+					if tostring(o.Text or "") ~= "" then
+						return true
+					end
 				end
 			end
-			task.wait(0.06)
+			return false
+		end)
+		return ok and found
+	end
+
+	local function sellerCandidates()
+		local found = {}
+		pcall(function()
+			local mapFolder = workspace:FindFirstChild("Map folder")
+			local seller = mapFolder and mapFolder:FindFirstChild("Seller")
+			if not seller then
+				return
+			end
+			local rank = { him = 1, Hunter = 2, Liltroll = 3 }
+			for _, child in ipairs(seller:GetChildren()) do
+				local prompt
+				for _, d in ipairs(child:GetDescendants()) do
+					if d:IsA("ProximityPrompt") then
+						prompt = d
+						break
+					end
+				end
+				if prompt then
+					found[#found + 1] = {
+						npc = child,
+						prompt = prompt,
+						part = child:IsA("BasePart") and child or child:FindFirstChildWhichIsA("BasePart", true),
+						path = child:GetFullName(),
+						order = rank[child.Name] or 99,
+					}
+				end
+			end
+		end)
+		table.sort(found, function(a, b)
+			return a.order < b.order
+		end)
+		return found
+	end
+
+	local npcs = sellerCandidates()
+	if #npcs == 0 then
+		local waitDeadline = os.clock() + 5
+		while os.clock() < waitDeadline and #npcs == 0 do
+			task.wait(0.1)
+			npcs = sellerCandidates()
+		end
+	end
+	if #npcs == 0 then
+		markSell("open-seller-missing")
+		return nil, "the seller NPC is missing - rejoin a new server"
+	end
+
+	for _, candidate in ipairs(npcs) do
+		markSell("open-npc", candidate.path)
+		if candidate.part then
+			pcall(function()
+				root.CFrame = candidate.part.CFrame + Vector3.new(0, 3, 0)
+			end)
+			task.wait(0.25)
+		end
+		pcall(function()
+			candidate.prompt.HoldDuration = 0
+			candidate.prompt.RequiresLineOfSight = false
+		end)
+		local deadline = os.clock() + (timeoutSeconds or 8)
+		local attempt = 0
+		while os.clock() < deadline do
+			attempt = attempt + 1
+			markSell("open-prompt", attempt)
+			pcall(FIRE_PROMPT, candidate.prompt)
+			for _ = 1, 10 do
+				local gui = LocalPlayer.PlayerGui:FindFirstChild("Shopguis")
+				local frame = gui and gui:FindFirstChild("MainsFrame")
+				if frame then
+					local ok, enabled = pcall(function()
+						return gui.Enabled
+					end)
+					if ok and enabled and frame.Visible and hasDialogText(frame) then
+						markSell("open-got")
+						return frame
+					end
+				end
+				task.wait(0.1)
+			end
 		end
 	end
 	return nil, "the shop did not open"
