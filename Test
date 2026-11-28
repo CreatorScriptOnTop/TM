@@ -4252,6 +4252,61 @@ function closeShop(main)
 			task.wait(0.1)
 		end
 	end
+	-- Touch can leave the final dialog visible after the connection-based
+	-- pass: its Nevermind handler is not always reachable through
+	-- MouseButton1Click connections. Retry the currently visible exit through
+	-- Roblox's native selection + Enter, waiting on that dialog's own
+	-- ScreenGui so a separate typewriter is not missed.
+	local function topLayerOf(obj)
+		local cur = obj
+		while typeof(cur) == "Instance" and cur.Parent do
+			if cur:IsA("LayerCollector") then
+				return cur
+			end
+			cur = cur.Parent
+		end
+		return gui
+	end
+	local nativeFired = {}
+	for _ = 1, 8 do
+		if shopClosed() then
+			break
+		end
+		local entries = findShopButtons()
+		local chosen, chosenLabel, chosenKey = nil, "", nil
+		for rank = 3, 2, -1 do
+			for _, entry in ipairs(entries) do
+				local key = entry.button:GetFullName() .. "|" .. entry.label
+				if exitRank(entry.label) == rank and not nativeFired[key] then
+					chosen, chosenLabel, chosenKey = entry.button, entry.label, key
+					break
+				end
+			end
+			if chosen then
+				break
+			end
+		end
+		if not chosen then
+			-- The final Nevermind can still be hidden while its own dialog
+			-- types out. Wait once more, then re-scan within this bounded loop.
+			waitForSellerDialog(gui, 0.8, 3)
+			task.wait(IS_MOBILE and 0.2 or 0.1)
+			continue
+		end
+		nativeFired[chosenKey] = true
+		waitForSellerDialog(topLayerOf(chosen), 0.8, 3)
+		pcall(function()
+			GuiService.SelectedObject = chosen
+		end)
+		task.wait(IS_MOBILE and 0.08 or 0.05)
+		pressEnter()
+		task.wait(0.3)
+		navTrace[#navTrace + 1] = "native " .. chosenLabel .. " -> " .. tostring(chosen.Name)
+	end
+	pcall(function()
+		GuiService.SelectedObject = nil
+	end)
+	markSell("close-native-done")
 	markSell("close-taps-done")
 	-- Give the game time to finish its own exit before deciding it failed.
 	for _ = 1, 12 do
