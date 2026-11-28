@@ -3894,12 +3894,15 @@ local function waitForSellerLine(maxWait)
 	end
 	local snap = sellerLineSnapshot()
 	local stuck, value = sellerLineStuck(snap)
+	local allText = dialogSnapshot(nil)
 	pcall(function()
 		G.__TMS_SELL_LINE_SNAPSHOT = snap
 		G.__TMS_SELL_LINE_STUCK = stuck
 		G.__TMS_SELL_LINE_VALUE = value
+		G.__TMS_DIALOG_ALL = allText
 	end)
 	print("[TMS] SELL LINE SNAPSHOT:\n" .. snap)
+	print("[TMS] ALL DIALOG SNAPSHOT:\n" .. allText)
 	if snap == "" then
 		markSell("sell-line-missing")
 		return false
