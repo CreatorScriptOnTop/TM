@@ -7264,20 +7264,43 @@ state.equipCodeTool = function(preferLetter, preferIndex)
 		return nil
 	end
 	local wantLetter = preferLetter and string.lower(preferLetter) or ""
+	local wantIndex = tonumber(preferIndex)
+	local function indexOfName(name)
+		local n = tostring(name)
+		local d = n:match("(%d+)%s*$") or n:match("codepart%s*(%d+)")
+		return d and tonumber(d) or nil
+	end
+	local function matches(t)
+		local n = string.lower(tostring(t.Name))
+		if wantIndex and indexOfName(n) == wantIndex then
+			return true
+		end
+		-- Only treat a letter as a real letter token. Matching the letter
+		-- inside "codepart" made slot 1 grab the wrong tool (d/e are both
+		-- in "codepart"), so Codepart1 never reached the machine.
+		if wantLetter ~= "" then
+			return n == wantLetter or n:match("[^%a]" .. wantLetter .. "$") ~= nil
+		end
+		return false
+	end
 	local chosen = nil
 	for _, t in ipairs(state.codeTools) do
-		if t.Parent and not state.codeToolsUsed[t] then
-			local n = string.lower(t.Name)
-			if (preferIndex and string.find(n, "codepart" .. preferIndex, 1, true))
-				or (wantLetter ~= "" and string.find(n, wantLetter, 1, true)) then
+		if t.Parent and not state.codeToolsUsed[t] and matches(t) then
+			chosen = t
+			break
+		end
+	end
+	if not chosen then
+		for _, t in ipairs(state.codeTools) do
+			if t.Parent and not state.codeToolsUsed[t] then
 				chosen = t
 				break
 			end
 		end
 	end
 	if not chosen then
-		for _, t in ipairs(state.codeTools) do
-			if t.Parent and not state.codeToolsUsed[t] then
+		for _, t in ipairs(bp:GetChildren()) do
+			if t:IsA("Tool") and not state.codeToolsUsed[t] and matches(t) then
 				chosen = t
 				break
 			end
@@ -7296,6 +7319,17 @@ state.equipCodeTool = function(preferLetter, preferIndex)
 	end
 	-- The game moves inserted codepart tools into ReplicatedStorage.Storedstuff.
 	-- Pick them up from there too, otherwise slots 4 and 5 cannot be retried.
+	if not chosen then
+		local stored = game:GetService("ReplicatedStorage"):FindFirstChild("Storedstuff")
+		if stored then
+			for _, t in ipairs(stored:GetChildren()) do
+				if t:IsA("Tool") and not state.codeToolsUsed[t] and matches(t) then
+					chosen = t
+					break
+				end
+			end
+		end
+	end
 	if not chosen then
 		local stored = game:GetService("ReplicatedStorage"):FindFirstChild("Storedstuff")
 		if stored then
@@ -8042,10 +8076,67 @@ local function runGenerator(genName)
 		task.wait(0.1)
 		settle += 0.1
 	end
-	-- Manual generator mode: do not fire prompts, hold position, or click buttons.
-	-- Just wait for the player to solve it and Generatordone to become true.
+	-- Walk up and press E on the generator, then leave the puzzle to the
+	-- player. Debug World generator prompts start disabled, so promptInstant
+	-- arms and fires the prompt. Retry a few times, widen the activation
+	-- distance, and also send a real E key so the prompt works even when the
+	-- player is not looking straight at it. No green buttons are clicked.
+	local genPrompt = (main or gen):FindFirstChildWhichIsA("ProximityPrompt", true)
+	local oldMax = nil
+	if genPrompt then
+		pcall(function()
+			oldMax = genPrompt.MaxActivationDistance
+			genPrompt.MaxActivationDistance = 100
+		end)
+	end
+	local prompted, tries = false, 0
+	for attempt = 1, 6 do
+		if not TMS_EVENT_KEEP.eventWaitAlive() or TMS_EVENT_KEEP.eventShouldAbort() then
+			break
+		end
+		-- Keep snapping back to the generator between retries so distance or
+		-- camera angle cannot make the E prompt unavailable.
+		TMS_EVENT_KEEP.eventTpTo(main or gen)
+		pcall(function()
+			if state.genHoldBound and type(state.applyGenHold) == "function" then
+				state.applyGenHold()
+			end
+		end)
+		local prompts = {}
+		if genPrompt then
+			prompts[1] = genPrompt
+		end
+		for _, o in ipairs((main or gen):GetDescendants()) do
+			if o:IsA("ProximityPrompt") and o ~= genPrompt then
+				prompts[#prompts + 1] = o
+			end
+		end
+		for _, p in ipairs(prompts) do
+			if promptInstant(p) == true then
+				prompted = true
+			end
+		end
+		tries = attempt
+		pcall(function()
+			VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+			task.wait(0.05)
+			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+		end)
+		task.wait(0.35)
+		if puzzleGuiOpen() then
+			break
+		end
+	end
+	if genPrompt and oldMax then
+		pcall(function()
+			genPrompt.MaxActivationDistance = oldMax
+		end)
+	end
 	state.releaseGenHold()
-	state.chest.genProbe = "manual generator - waiting for player"
+	state.chest.genProbe = "generator E fired=" .. tostring(prompted)
+		.. " tries=" .. tries
+		.. " gui=" .. tostring(puzzleGuiOpen())
+		.. " manual solve - waiting for player"
 	local waited = 0
 	while true do
 		local live = workspace:FindFirstChild(genName)
@@ -8162,12 +8253,24 @@ local function runDebugEventBody(startStage)
 	if startStage == "touchevents" or startStage == "generators" or startStage == "codeparts" then
 	if state.chest.autoDebugEvent then
 		local fiveSlot = workspace:FindFirstChild("5 Slot Generator")
-		if fiveSlot then
-			TMS_EVENT_KEEP.eventTpTo(fiveSlot)
-		end
 		local codeParts = { "Codepart1", "Codepart2", "Codepart3", "Codepart4", "Codepart5" }
 		local waited = 0
 		local allDone = false
+		-- Generators are done. Give the game 5 seconds to advance, then make
+		-- one trip to the slot machine. Slot handling below is unchanged.
+		task.wait(5)
+		if not TMS_EVENT_KEEP.eventWaitAlive() or TMS_EVENT_KEEP.eventShouldAbort() then
+			mark("machine trip aborted")
+		elseif fiveSlot then
+			local target = fiveSlot:FindFirstChild("stuff")
+				or fiveSlot:FindFirstChildWhichIsA("BasePart")
+				or fiveSlot
+			local moved = TMS_EVENT_KEEP.eventTpTo(target, true)
+			mark("machine trip tp=" .. tostring(moved))
+		else
+			mark("machine trip: missing 5 Slot Generator")
+		end
+		fiveSlot = workspace:FindFirstChild("5 Slot Generator")
 		local function findCodeparts(name)
 			local found = {}
 			local function real(o)
@@ -8281,7 +8384,7 @@ local function runDebugEventBody(startStage)
 					TMS_EVENT_KEEP.eventTpTo(slot, true)
 					task.wait(0.2)
 					local codeTool = state.equipCodeTool(letter, i)
-					local stopToolHold = holdCodeTool(codeTool, 2.5)
+					local stopToolHold = holdCodeTool(codeTool, 3.0)
 					if codeTool then
 						mark("code slot " .. slotName .. " equipped=" .. codeTool.Name)
 					else
@@ -8310,26 +8413,59 @@ local function runDebugEventBody(startStage)
 							end)
 						end
 					end
-					local okSet = afterInput == letter
-					if word and not okSet then
-						pcall(function()
-							word.Value = letter
-							okSet = word.Value == letter
-						end)
-					end
-					if okSet then
-						placed += 1
-					end
+					local inserted = afterInput == letter
 					stopToolHold()
 					if codeTool then
-						if okSet then
+						-- Only consume the tool when the game accepted the
+						-- insert. A wrong tool must stay available for retry.
+						if inserted then
 							state.codeToolsUsed[codeTool] = true
 						end
 						state.releaseCodeTool(codeTool)
 					end
+					if not inserted then
+						-- Slot 1 used to grab the wrong tool; re-equip by exact
+						-- index and fire the real slot prompt again.
+						mark("code slot " .. slotName .. " retry exact tool")
+						local retryTool = state.equipCodeTool(letter, i)
+						if retryTool then
+							local stopRetry = holdCodeTool(retryTool, 3.0)
+							for attempt = 1, 3 do
+								if cp then
+									promptInstant(cp)
+								end
+								task.wait(0.15)
+								holdSlotInput(slot)
+								task.wait(0.25)
+								pcall(function()
+									afterInput = tostring(word and word.Value or "-")
+								end)
+								if afterInput == letter then
+									inserted = true
+									break
+								end
+							end
+							stopRetry()
+							if inserted then
+								state.codeToolsUsed[retryTool] = true
+							end
+							state.releaseCodeTool(retryTool)
+						end
+					end
+					if not inserted and word then
+						-- Display-only fallback after real inserts failed.
+						pcall(function()
+							word.Value = letter
+						end)
+					end
+					local okSet = inserted or (word and tostring(word.Value) == letter)
+					if inserted then
+						placed += 1
+					end
 					mark("code slot " .. slotName .. "=" .. letter
 						.. " before=" .. before
 						.. " afterInput=" .. afterInput
+						.. " inserted=" .. tostring(inserted)
 						.. " set=" .. tostring(okSet)
 						.. " proxim=" .. tostring(proxim)
 						.. " hold=" .. tostring(held)
