@@ -3821,6 +3821,87 @@ local function waitForSellerDialog(root, noChangeTimeout, maxWait)
 	return true
 end
 
+-- Mobile-only sell wait. dialogSnapshot also sees our own ItemSelection text,
+-- so a click can look like "the seller finished" while the real line is still
+-- typing. This snapshot watches only seller TextLabels, never shop controls,
+-- and refuses to accept a one-letter line ("H") as complete.
+local function sellerLineSnapshot()
+	local parts = {}
+	local function collect(root)
+		pcall(function()
+			for _, obj in ipairs(root:GetDescendants()) do
+				if typeof(obj) == "Instance" and obj:IsA("TextLabel") then
+					local node, skip = obj, false
+					while typeof(node) == "Instance" and node ~= LocalPlayer.PlayerGui do
+						if node:IsA("GuiButton")
+							or node.Name == "SellSelections"
+							or node.Name == "ButtonSelections"
+							or node.Name == "ScrollingFrame"
+							or node.Name == "MainShop" then
+							skip = true
+							break
+						end
+						node = node.Parent
+					end
+					if not skip then
+						local text = tostring(obj.Text or "")
+						if text ~= "" then
+							parts[#parts + 1] = obj:GetFullName() .. "=" .. text
+						end
+					end
+				end
+			end
+		end)
+	end
+	pcall(function()
+		for _, child in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
+			local name = tostring(child.Name)
+			if typeof(child) == "Instance" and child:IsA("LayerCollector")
+				and not string.find(string.upper(name), "TMS", 1, true) then
+				collect(child)
+			end
+		end
+	end)
+	table.sort(parts)
+	return table.concat(parts, "\n")
+end
+
+local function sellerLineStuck(snapshot)
+	for line in (snapshot or ""):gmatch("[^\n]+") do
+		local value = line:match("=([^\n]*)$") or ""
+		value = string.gsub(value, "^%s+", "")
+		value = string.gsub(value, "%s+$", "")
+		if value ~= "" and #value <= 2
+			and not string.find(value, "[%.%?%!]%s*$") then
+			return true, value
+		end
+	end
+	return false, nil
+end
+
+local function waitForSellerLine(maxWait)
+	maxWait = maxWait or 5
+	local start = os.clock()
+	local lastChange = start
+	local last = sellerLineSnapshot()
+	local seenChange = false
+	while os.clock() - start < maxWait do
+		task.wait(0.05)
+		local now = sellerLineSnapshot()
+		if now ~= last then
+			last = now
+			lastChange = os.clock()
+			seenChange = true
+		end
+		if not sellerLineStuck(now) and os.clock() - lastChange >= 0.3 then
+			break
+		end
+	end
+	local stuck, value = sellerLineStuck(sellerLineSnapshot())
+	markSell(stuck and "sell-line-stuck" or "sell-line-clear", value)
+	return not stuck
+end
+
 local function backpackCount()
 	local backpack = LocalPlayer:FindFirstChild("Backpack")
 	local n = 0
@@ -4461,13 +4542,25 @@ local function runSellOnce()
 			end
 			local sellall = shop:FindFirstChild("Sellall")
 			local sell = shop:FindFirstChild("Sell")
-			if sellall then
-				selectWith(sellall)
+			if IS_MOBILE then
+				-- Delta treats the second Enter as input on the seller's new
+				-- typewriter and aborts it at the first letter ("H"). One sell
+				-- action only; Sellall sells every cup of this type, Sell is
+				-- the fallback if Sellall is missing.
+				local action = sellall or sell
+				markSell("sell-action", action and action.Name or "missing")
+				if action then
+					selectWith(action)
+				end
+			else
+				if sellall then
+					selectWith(sellall)
+				end
+				if sell then
+					selectWith(sell)
+				end
 			end
-			if sell then
-				selectWith(sell)
-			end
-			local saleDeadline = os.clock() + 0.4
+			local saleDeadline = os.clock() + (IS_MOBILE and 1.2 or 0.4)
 			while os.clock() < saleDeadline do
 				if ownedCount(name) < before then
 					break
@@ -4479,12 +4572,26 @@ local function runSellOnce()
 			else
 				failed[#failed + 1] = name .. " (nothing sold)"
 			end
+			if IS_MOBILE then
+				-- Do not touch the next item or the exit until this sale's
+				-- seller line has actually finished typing.
+				markSell("sell-line-wait", name)
+				waitForSellerLine(5)
+				task.wait(0.1)
+			end
 		end
 	end)
 	markSell("sell-loop-end", ok and "ok" or tostring(message))
-	-- Give the seller/game a full 1.5s to finish the last sale line before
-	-- navigating the exit buttons. Rushing this step skipped the final exit.
-	task.wait(1.5)
+	-- Give the seller/game time to finish the last sale line before navigating
+	-- the exit buttons. On mobile use the seller-only watcher; the old fixed
+	-- wait let our own exit Enter abort the line at "H".
+	if IS_MOBILE then
+		markSell("sell-pre-close-line")
+		waitForSellerLine(5)
+		task.wait(0.2)
+	else
+		task.wait(1.5)
+	end
 	markSell("sell-pre-close-wait")
 	closeShop(main)
 	markSell("sell-after-close")
